@@ -4,9 +4,9 @@ import { supabase } from '../lib/supabase';
 import { uploadImage } from '../utils/cloudinary';
 import LandingPage from './LandingPage';
 
-type AdminTab = 'products' | 'offers' | 'packages' | 'landings' | 'widgets';
+type AdminTab = 'products' | 'offers' | 'packages' | 'landings' | 'media' | 'analytics' | 'widgets';
 
-const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; label?: string }> = ({ value, onChange, label }) => {
+const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; label?: string; onOpenLibrary?: () => void }> = ({ value, onChange, label, onOpenLibrary }) => {
     const [isUploading, setIsUploading] = useState(false);
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -15,7 +15,7 @@ const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; 
 
         setIsUploading(true);
         try {
-            const url = await uploadImage(file);
+            const url = await (window as any).uploadImageToLibrary(file);
             onChange(url);
         } catch (err: any) {
             alert('Error al subir imagen: ' + err.message);
@@ -26,7 +26,18 @@ const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; 
 
     return (
         <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-500 ml-1">{label || 'Imagen'}</label>
+            <div className="flex justify-between items-center px-1">
+                <label className="text-xs font-bold text-slate-500">{label || 'Imagen'}</label>
+                {onOpenLibrary && (
+                    <button
+                        type="button"
+                        onClick={onOpenLibrary}
+                        className="text-emerald-600 font-black text-[10px] uppercase hover:underline"
+                    >
+                        Biblioteca 🖼️
+                    </button>
+                )}
+            </div>
             <div className="flex gap-4 items-center">
                 <div className="relative group w-24 h-24 bg-slate-100 rounded-2xl overflow-hidden border-2 border-dashed border-slate-200 flex items-center justify-center shrink-0">
                     {value ? (
@@ -60,6 +71,64 @@ const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; 
     );
 };
 
+const ResponsiveAlignmentToggle: React.FC<{
+    value: any;
+    onChange: (val: any) => void;
+    label?: string;
+}> = ({ value, onChange, label }) => {
+    const options = [
+        { id: 'left', icon: '⬅️' },
+        { id: 'center', icon: '↔️' },
+        { id: 'right', icon: '➡️' }
+    ];
+
+    const getVal = (device: 'mobile' | 'desktop') => {
+        if (typeof value === 'object') return value[device] || 'left';
+        return value || 'left';
+    };
+
+    const setVal = (device: 'mobile' | 'desktop', id: string) => {
+        const current = typeof value === 'object' ? value : { mobile: value || 'left', desktop: value || 'left' };
+        onChange({ ...current, [device]: id });
+    };
+
+    return (
+        <div className="flex flex-col gap-1.5">
+            {label && <label className="text-[10px] font-black text-slate-400 uppercase ml-1">{label}</label>}
+            <div className="flex items-center gap-3">
+                {/* Mobile */}
+                <div className="flex bg-slate-100 p-1 rounded-xl">
+                    <span className="text-[10px] self-center mx-1.5">📱</span>
+                    {options.map(opt => (
+                        <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setVal('mobile', opt.id)}
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${getVal('mobile') === opt.id ? 'bg-white shadow-sm scale-110' : 'opacity-40 hover:opacity-100'}`}
+                        >
+                            <span className="text-xs">{opt.icon}</span>
+                        </button>
+                    ))}
+                </div>
+                {/* Desktop */}
+                <div className="flex bg-slate-100 p-1 rounded-xl">
+                    <span className="text-[10px] self-center mx-1.5">💻</span>
+                    {options.map(opt => (
+                        <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setVal('desktop', opt.id)}
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${getVal('desktop') === opt.id ? 'bg-white shadow-sm scale-110' : 'opacity-40 hover:opacity-100'}`}
+                        >
+                            <span className="text-xs">{opt.icon}</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const AdminDashboard: React.FC = () => {
     const { treatments, loading, refetch } = useServices();
     const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -74,6 +143,12 @@ const AdminDashboard: React.FC = () => {
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
     const [error, setError] = useState('');
     const [previewMode, setPreviewMode] = useState<'mobile' | 'tablet' | 'desktop'>('mobile');
+    const [media, setMedia] = useState<any[]>([]);
+    const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+    const [onMediaSelect, setOnMediaSelect] = useState<(url: string) => void>(() => () => { });
+    const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all');
+    const [analyticsEvents, setAnalyticsEvents] = useState<any[]>([]);
+    const [isFetchingAnalytics, setIsFetchingAnalytics] = useState(false);
 
     useEffect(() => {
         const savedSession = localStorage.getItem('promedid_admin_session');
@@ -87,8 +162,76 @@ const AdminDashboard: React.FC = () => {
             refetch();
             fetchBundles();
             fetchLandings();
+            fetchMedia();
         }
     }, [isLoggedIn]);
+
+    // Expose upload function for ImageUploader
+    (window as any).uploadImageToLibrary = async (file: File) => {
+        const url = await uploadImage(file);
+        // Register in media table
+        const { error } = await supabase.from('media').insert({
+            url,
+            type: 'image',
+            public_id: `manual_${Date.now()}`,
+            name: file.name
+        });
+        if (!error) fetchMedia();
+        return url;
+    };
+
+    const fetchMedia = async () => {
+        const { data, error } = await supabase.from('media').select('*').order('created_at', { ascending: false });
+        if (!error && data) setMedia(data);
+    };
+
+    const handleDeleteMedia = async (id: string, publicId: string) => {
+        const confirmDelete = confirm(
+            "⚠️ ¿ESTÁS SEGURO?\n\nEsta acción eliminará el archivo PERMANENTEMENTE de tu biblioteca de Promedid y de los servidores de Cloudinary."
+        );
+
+        if (!confirmDelete) return;
+
+        try {
+            // 1. Delete from Cloudinary Directly (Frontend)
+            const cloudName = "dlkky5xuo";
+            const apiKey = "729758187275154";
+            const apiSecret = "0OPoy3ZA3E2QYiQ9HSZNlRQjNnc";
+            const timestamp = Math.round(new Date().getTime() / 1000).toString();
+
+            // Generate Signature using Crypto-js (added to index.html)
+            const stringToSign = `public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+            const signature = (window as any).CryptoJS.SHA1(stringToSign).toString();
+
+            const formData = new FormData();
+            formData.set('public_id', publicId);
+            formData.set('timestamp', timestamp);
+            formData.set('api_key', apiKey);
+            formData.set('signature', signature);
+
+            const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/destroy`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const cloudResult = await response.json();
+
+            if (cloudResult.result !== 'ok' && cloudResult.result !== 'not found') {
+                console.warn('Cloudinary Sync Warning:', cloudResult);
+            }
+
+            // 2. Delete from supabase
+            const { error } = await supabase.from('media').delete().eq('id', id);
+            if (!error) {
+                fetchMedia();
+            } else {
+                throw error;
+            }
+        } catch (err: any) {
+            alert('Error en la eliminación: ' + err.message);
+            console.error(err);
+        }
+    };
 
     const fetchLandings = async () => {
         const { data, error } = await supabase.from('landings').select('*').order('created_at', { ascending: false });
@@ -99,6 +242,21 @@ const AdminDashboard: React.FC = () => {
         const { data, error } = await supabase.from('bundles').select('*').order('created_at', { ascending: false });
         if (!error && data) setBundles(data);
     };
+
+    const fetchAnalytics = async () => {
+        setIsFetchingAnalytics(true);
+        const { data, error } = await supabase
+            .from('analytics_events')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(1000);
+        if (!error && data) setAnalyticsEvents(data);
+        setIsFetchingAnalytics(false);
+    };
+
+    useEffect(() => {
+        if (activeTab === 'analytics') fetchAnalytics();
+    }, [activeTab]);
 
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
@@ -329,6 +487,8 @@ const AdminDashboard: React.FC = () => {
                     <SidebarItem id="offers" label="Ofertas Flash" icon="⚡" />
                     <SidebarItem id="packages" label="Paquetes / Bundles" icon="🎁" />
                     <SidebarItem id="landings" label="Páginas de Venta" icon="🚀" />
+                    <SidebarItem id="media" label="Biblioteca" icon="🖼️" />
+                    <SidebarItem id="analytics" label="Estadísticas" icon="📊" />
                     <SidebarItem id="widgets" label="Widgets" icon="🛠️" />
                 </nav>
 
@@ -359,6 +519,7 @@ const AdminDashboard: React.FC = () => {
                             {activeTab === 'offers' && 'Ofertas y Descuentos'}
                             {activeTab === 'packages' && 'Paquetes de Valoración'}
                             {activeTab === 'landings' && 'Embudos de Venta (Landings)'}
+                            {activeTab === 'media' && 'Biblioteca de Medios'}
                             {activeTab === 'widgets' && 'Configuración de Widgets'}
                         </h2>
                         <p className="text-xs text-slate-500 mt-1 capitalize">{activeTab} management system</p>
@@ -520,8 +681,30 @@ const AdminDashboard: React.FC = () => {
 
                     {activeTab === 'landings' && (
                         <div className="animate-fade-in space-y-6">
-                            <div className="flex justify-between items-center mb-4">
-                                <h3 className="font-bold text-slate-900">Embudos Activos ({landings.length})</h3>
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                                <div>
+                                    <h3 className="font-bold text-slate-900">Embudos Activos ({landings.length})</h3>
+                                    {/* Campaign Shortcuts */}
+                                    <div className="flex items-center gap-2 mt-2">
+                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Campañas:</p>
+                                        <button
+                                            onClick={() => window.open(window.location.origin + window.location.pathname + '#landing/landing-ventas-campanha', '_blank')}
+                                            className="bg-emerald-50 text-emerald-600 px-3 py-1 rounded-lg text-[10px] font-black border border-emerald-100 hover:bg-emerald-600 hover:text-white transition-all"
+                                        >
+                                            🚀 Alternativa Salud (Live)
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                const campaign = landings.find((l: any) => l.slug === 'landing-ventas-campanha');
+                                                if (campaign) setEditingLanding(campaign);
+                                                else alert('Campaña no encontrada en la base de datos. Asegúrate de haber corrido el SQL.');
+                                            }}
+                                            className="bg-slate-100 text-slate-600 px-3 py-1 rounded-lg text-[10px] font-black border border-slate-200 hover:bg-slate-900 hover:text-white transition-all"
+                                        >
+                                            🛠️ Editar Campaña
+                                        </button>
+                                    </div>
+                                </div>
                                 <button
                                     onClick={() => setEditingLanding({
                                         id: 'nuevo-' + Date.now(),
@@ -982,6 +1165,53 @@ const AdminDashboard: React.FC = () => {
                                                 onChange={e => setEditingLanding({ ...editingLanding, title: e.target.value })}
                                                 placeholder="ej: Desintoxicación Iónica Pro"
                                             />
+                                            <div className="flex items-center gap-2 mt-2">
+                                                <span className="text-[9px] font-black text-slate-400 uppercase">Grandor Título:</span>
+                                                <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                    <span className="text-[10px]">📱</span>
+                                                    <input
+                                                        type="text"
+                                                        className="w-10 text-[9px] outline-none font-mono"
+                                                        placeholder="2.25rem"
+                                                        value={typeof editingLanding.config?.styles?.heroTitleSize === 'object' ? editingLanding.config.styles.heroTitleSize.mobile || '' : ''}
+                                                        onChange={e => {
+                                                            const current = typeof editingLanding.config?.styles?.heroTitleSize === 'object' ? editingLanding.config.styles.heroTitleSize : {};
+                                                            setEditingLanding({
+                                                                ...editingLanding,
+                                                                config: {
+                                                                    ...editingLanding.config,
+                                                                    styles: {
+                                                                        ...(editingLanding.config?.styles || {}),
+                                                                        heroTitleSize: { ...current, mobile: e.target.value }
+                                                                    }
+                                                                }
+                                                            });
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                    <span className="text-[10px]">💻</span>
+                                                    <input
+                                                        type="text"
+                                                        className="w-10 text-[9px] outline-none font-mono"
+                                                        placeholder="4.5rem"
+                                                        value={typeof editingLanding.config?.styles?.heroTitleSize === 'object' ? editingLanding.config.styles.heroTitleSize.desktop || '' : (typeof editingLanding.config?.styles?.heroTitleSize === 'string' ? editingLanding.config.styles.heroTitleSize : '')}
+                                                        onChange={e => {
+                                                            const current = typeof editingLanding.config?.styles?.heroTitleSize === 'object' ? editingLanding.config.styles.heroTitleSize : { desktop: typeof editingLanding.config?.styles?.heroTitleSize === 'string' ? editingLanding.config.styles.heroTitleSize : '' };
+                                                            setEditingLanding({
+                                                                ...editingLanding,
+                                                                config: {
+                                                                    ...editingLanding.config,
+                                                                    styles: {
+                                                                        ...(editingLanding.config?.styles || {}),
+                                                                        heroTitleSize: { ...current, desktop: e.target.value }
+                                                                    }
+                                                                }
+                                                            });
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
                                         </div>
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black text-slate-400 ml-1 uppercase">Slug (URL)</label>
@@ -1021,76 +1251,6 @@ const AdminDashboard: React.FC = () => {
                                     </div>
                                 </section>
 
-                                {/* Typography and Styles */}
-                                <section className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-6">
-                                    <div className="flex justify-between items-center px-1">
-                                        <h3 className="text-[10px] font-black text-slate-900 uppercase tracking-widest">🎨 Estilos y Tipografía (Por Sección)</h3>
-                                        <span className="text-[9px] text-slate-400 italic">Tip: Usa rem, px o vw (ej: 4rem)</span>
-                                    </div>
-
-                                    <div className="space-y-6 divide-y divide-slate-200">
-                                        {/* Hero Group */}
-                                        <div className="pt-2 space-y-4">
-                                            <p className="text-[9px] font-black text-blue-500 uppercase tracking-tighter">1. Hero (Impacto)</p>
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="space-y-2">
-                                                    <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Título</label>
-                                                    <input type="text" className="w-full bg-white p-2 rounded-lg border border-slate-200 text-[10px] font-mono" value={editingLanding.config?.styles?.heroTitleSize || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), heroTitleSize: e.target.value } } })} placeholder="Default: 4rem" />
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Subtítulo</label>
-                                                    <input type="text" className="w-full bg-white p-2 rounded-lg border border-slate-200 text-[10px] font-mono" value={editingLanding.config?.styles?.heroSubtitleSize || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), heroSubtitleSize: e.target.value } } })} placeholder="Default: 1.25rem" />
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* PAS Group */}
-                                        <div className="pt-4 space-y-4">
-                                            <p className="text-[9px] font-black text-red-500 uppercase tracking-tighter">2. PAS (Problema)</p>
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="space-y-2">
-                                                    <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Título Sección</label>
-                                                    <input type="text" className="w-full bg-white p-2 rounded-lg border border-slate-200 text-[10px] font-mono" value={editingLanding.config?.styles?.pasTitleSize || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), pasTitleSize: e.target.value } } })} placeholder="Default: 3rem" />
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Texto Problemas</label>
-                                                    <input type="text" className="w-full bg-white p-2 rounded-lg border border-slate-200 text-[10px] font-mono" value={editingLanding.config?.styles?.pasProblemSize || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), pasProblemSize: e.target.value } } })} placeholder="Default: 1.125rem" />
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* Solutions Group */}
-                                        <div className="pt-4 space-y-4">
-                                            <p className="text-[9px] font-black text-purple-500 uppercase tracking-tighter">3. Soluciones (Cuerpo)</p>
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="space-y-2">
-                                                    <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Títulos Bloque</label>
-                                                    <input type="text" className="w-full bg-white p-2 rounded-lg border border-slate-200 text-[10px] font-mono" value={editingLanding.config?.styles?.solutionTitleSize || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), solutionTitleSize: e.target.value } } })} placeholder="Default: 3rem" />
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Texto Descripción</label>
-                                                    <input type="text" className="w-full bg-white p-2 rounded-lg border border-slate-200 text-[10px] font-mono" value={editingLanding.config?.styles?.solutionTextSize || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), solutionTextSize: e.target.value } } })} placeholder="Default: 1.125rem" />
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* CTA Group */}
-                                        <div className="pt-4 space-y-4">
-                                            <p className="text-[9px] font-black text-emerald-500 uppercase tracking-tighter">4. CTA (Cierre)</p>
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="space-y-2">
-                                                    <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Título CTA</label>
-                                                    <input type="text" className="w-full bg-white p-2 rounded-lg border border-slate-200 text-[10px] font-mono" value={editingLanding.config?.styles?.ctaTitleSize || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), ctaTitleSize: e.target.value } } })} placeholder="Default: 4rem" />
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Texto Urgencia</label>
-                                                    <input type="text" className="w-full bg-white p-2 rounded-lg border border-slate-200 text-[10px] font-mono" value={editingLanding.config?.styles?.ctaTextSize || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), ctaTextSize: e.target.value } } })} placeholder="Default: 1.25rem" />
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </section>
-
                                 {/* Hero Editor */}
                                 <section className="space-y-4">
                                     <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest bg-blue-50 text-blue-600 p-2 rounded-lg inline-block">2. Sección Hero (Impacto)</h3>
@@ -1098,7 +1258,7 @@ const AdminDashboard: React.FC = () => {
                                         <label className="text-xs font-bold text-slate-500 ml-1">Subtítulo Hero</label>
                                         <textarea
                                             rows={2}
-                                            className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-transparent focus:border-emerald-500 focus:bg-white outline-none transition-all resize-none"
+                                            className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-transparent focus:border-emerald-500 focus:bg-white outline-none transition-all resize-none text-xs"
                                             value={editingLanding.config.hero.subtitle}
                                             onChange={e => setEditingLanding({
                                                 ...editingLanding,
@@ -1106,10 +1266,59 @@ const AdminDashboard: React.FC = () => {
                                             })}
                                             placeholder="Breve texto que refuerce el título..."
                                         />
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase">Grandor Subtítulo:</span>
+                                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                <span className="text-[10px]">📱</span>
+                                                <input type="text" className="w-10 text-[9px] outline-none font-mono" placeholder="1.2rem" value={editingLanding.config?.styles?.heroSubtitleSize?.mobile || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), heroSubtitleSize: { ...(editingLanding.config?.styles?.heroSubtitleSize || {}), mobile: e.target.value } } } })} />
+                                            </div>
+                                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                <span className="text-[10px]">💻</span>
+                                                <input type="text" className="w-10 text-[9px] outline-none font-mono" placeholder="1.5rem" value={editingLanding.config?.styles?.heroSubtitleSize?.desktop || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), heroSubtitleSize: { ...(editingLanding.config?.styles?.heroSubtitleSize || {}), desktop: e.target.value } } } })} />
+                                            </div>
+                                        </div>
+                                        <div className="pt-2 border-t border-slate-100 flex items-center gap-4">
+                                            <ResponsiveAlignmentToggle
+                                                label="Alineación Hero"
+                                                value={editingLanding.config?.styles?.heroAlignment}
+                                                onChange={val => setEditingLanding({
+                                                    ...editingLanding,
+                                                    config: {
+                                                        ...editingLanding.config,
+                                                        styles: {
+                                                            ...(editingLanding.config?.styles || {}),
+                                                            heroAlignment: val
+                                                        }
+                                                    }
+                                                })}
+                                            />
+                                            <div className="flex flex-col gap-1.5">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Botón Hero:</label>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                        <span className="text-[10px]">📱</span>
+                                                        <input type="text" className="w-10 text-[9px] outline-none font-mono" placeholder="1.1rem" value={editingLanding.config?.styles?.heroButtonSize?.mobile || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), heroButtonSize: { ...(editingLanding.config?.styles?.heroButtonSize || {}), mobile: e.target.value } } } })} />
+                                                    </div>
+                                                    <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                        <span className="text-[10px]">💻</span>
+                                                        <input type="text" className="w-10 text-[9px] outline-none font-mono" placeholder="1.1rem" value={editingLanding.config?.styles?.heroButtonSize?.desktop || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), heroButtonSize: { ...(editingLanding.config?.styles?.heroButtonSize || {}), desktop: e.target.value } } } })} />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                     <ImageUploader
                                         label="Imagen de Fondo Hero"
                                         value={editingLanding.config.hero.imageUrl}
+                                        onOpenLibrary={() => {
+                                            setOnMediaSelect(() => (url: string) => {
+                                                setEditingLanding((prev: any) => ({
+                                                    ...prev,
+                                                    config: { ...prev.config, hero: { ...prev.config.hero, imageUrl: url } }
+                                                }));
+                                            });
+                                            setIsMediaModalOpen(true);
+                                        }}
                                         onChange={url => setEditingLanding({
                                             ...editingLanding,
                                             config: { ...editingLanding.config, hero: { ...editingLanding.config.hero, imageUrl: url } }
@@ -1119,31 +1328,316 @@ const AdminDashboard: React.FC = () => {
 
                                 {/* PAS PAS PAS */}
                                 <section className="space-y-4">
-                                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest bg-red-50 text-red-600 p-2 rounded-lg inline-block">3. Estructura PAS (Agitación)</h3>
-                                    <div className="space-y-3">
-                                        {[1, 2, 3].map(i => (
-                                            <div key={i} className="space-y-1">
-                                                <label className="text-[10px] font-bold text-slate-400 ml-1">Problema/Dolor {i}</label>
+                                    <div className="flex justify-between items-center">
+                                        <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest bg-red-50 text-red-600 p-2 rounded-lg inline-block">3. Estructura PAS (Agitación)</h3>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase">Títulos:</span>
+                                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                <span className="text-[10px]">📱</span>
                                                 <input
-                                                    className="w-full bg-slate-50 p-3 rounded-xl border border-transparent focus:border-red-500 outline-none transition-all text-xs"
-                                                    value={(editingLanding.config.pas || {})[`problem${i}`] || ''}
-                                                    onChange={e => setEditingLanding({
+                                                    type="text"
+                                                    className="w-10 text-[9px] outline-none font-mono"
+                                                    placeholder="1.8rem"
+                                                    value={typeof editingLanding.config?.styles?.pasTitleSize === 'object' ? editingLanding.config.styles.pasTitleSize.mobile || '' : ''}
+                                                    onChange={e => {
+                                                        const current = typeof editingLanding.config?.styles?.pasTitleSize === 'object' ? editingLanding.config.styles.pasTitleSize : {};
+                                                        setEditingLanding({
+                                                            ...editingLanding,
+                                                            config: {
+                                                                ...editingLanding.config,
+                                                                styles: {
+                                                                    ...(editingLanding.config?.styles || {}),
+                                                                    pasTitleSize: { ...current, mobile: e.target.value }
+                                                                }
+                                                            }
+                                                        });
+                                                    }}
+                                                />
+                                            </div>
+                                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                <span className="text-[10px]">💻</span>
+                                                <input
+                                                    type="text"
+                                                    className="w-10 text-[9px] outline-none font-mono"
+                                                    placeholder="3rem"
+                                                    value={typeof editingLanding.config?.styles?.pasTitleSize === 'object' ? editingLanding.config.styles.pasTitleSize.desktop || '' : (typeof editingLanding.config?.styles?.pasTitleSize === 'string' ? editingLanding.config.styles.pasTitleSize : '')}
+                                                    onChange={e => {
+                                                        const current = typeof editingLanding.config?.styles?.pasTitleSize === 'object' ? editingLanding.config.styles.pasTitleSize : { desktop: typeof editingLanding.config?.styles?.pasTitleSize === 'string' ? editingLanding.config.styles.pasTitleSize : '' };
+                                                        setEditingLanding({
+                                                            ...editingLanding,
+                                                            config: {
+                                                                ...editingLanding.config,
+                                                                styles: {
+                                                                    ...(editingLanding.config?.styles || {}),
+                                                                    pasTitleSize: { ...current, desktop: e.target.value }
+                                                                }
+                                                            }
+                                                        });
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 px-1 pb-2">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-tight">Grandor de los problemas:</span>
+                                        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                            <span className="text-[10px]">📱</span>
+                                            <input
+                                                type="text"
+                                                className="w-10 text-[9px] outline-none font-mono"
+                                                placeholder="1.1rem"
+                                                value={typeof editingLanding.config?.styles?.pasProblemSize === 'object' ? editingLanding.config.styles.pasProblemSize.mobile || '' : ''}
+                                                onChange={e => {
+                                                    const current = typeof editingLanding.config?.styles?.pasProblemSize === 'object' ? editingLanding.config.styles.pasProblemSize : {};
+                                                    setEditingLanding({
                                                         ...editingLanding,
                                                         config: {
                                                             ...editingLanding.config,
-                                                            pas: { ...(editingLanding.config.pas || {}), [`problem${i}`]: e.target.value }
+                                                            styles: {
+                                                                ...(editingLanding.config?.styles || {}),
+                                                                pasProblemSize: { ...current, mobile: e.target.value }
+                                                            }
                                                         }
-                                                    })}
-                                                    placeholder="ej: ¿Te sientes cansado todo el día?"
-                                                />
-                                            </div>
-                                        ))}
+                                                    });
+                                                }}
+                                            />
+                                        </div>
+                                        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                            <span className="text-[10px]">💻</span>
+                                            <input
+                                                type="text"
+                                                className="w-10 text-[9px] outline-none font-mono"
+                                                placeholder="1.1rem"
+                                                value={typeof editingLanding.config?.styles?.pasProblemSize === 'object' ? editingLanding.config.styles.pasProblemSize.desktop || '' : (typeof editingLanding.config?.styles?.pasProblemSize === 'string' ? editingLanding.config.styles.pasProblemSize : '')}
+                                                onChange={e => {
+                                                    const current = typeof editingLanding.config?.styles?.pasProblemSize === 'object' ? editingLanding.config.styles.pasProblemSize : { desktop: typeof editingLanding.config?.styles?.pasProblemSize === 'string' ? editingLanding.config.styles.pasProblemSize : '' };
+                                                    setEditingLanding({
+                                                        ...editingLanding,
+                                                        config: {
+                                                            ...editingLanding.config,
+                                                            styles: {
+                                                                ...(editingLanding.config?.styles || {}),
+                                                                pasProblemSize: { ...current, desktop: e.target.value }
+                                                            }
+                                                        }
+                                                    });
+                                                }}
+                                            />
+                                        </div>
+                                        <div className="ml-auto">
+                                            <ResponsiveAlignmentToggle
+                                                value={editingLanding.config?.styles?.pasAlignment}
+                                                onChange={val => setEditingLanding({
+                                                    ...editingLanding,
+                                                    config: {
+                                                        ...editingLanding.config,
+                                                        styles: {
+                                                            ...(editingLanding.config?.styles || {}),
+                                                            pasAlignment: val
+                                                        }
+                                                    }
+                                                })}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-4">
+                                        {[1, 2, 3].map(i => {
+                                            const problem = (editingLanding.config.pas || {})[`problem${i}`] || '';
+                                            const text = typeof problem === 'object' ? problem.text : (typeof problem === 'string' ? problem : '');
+                                            const image = typeof problem === 'object' ? problem.image : '';
+
+                                            return (
+                                                <div key={i} className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                                    <div className="flex justify-between items-center px-1">
+                                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Identificación {i}</label>
+                                                    </div>
+                                                    <div className="grid md:grid-cols-2 gap-4">
+                                                        <div className="space-y-1">
+                                                            <label className="text-[9px] font-bold text-slate-400 ml-1 uppercase">Problema/Dolor</label>
+                                                            <textarea
+                                                                rows={2}
+                                                                className="w-full bg-white p-3 rounded-xl border border-slate-200 focus:border-red-500 outline-none transition-all text-xs resize-none"
+                                                                value={text}
+                                                                onChange={e => setEditingLanding({
+                                                                    ...editingLanding,
+                                                                    config: {
+                                                                        ...editingLanding.config,
+                                                                        pas: {
+                                                                            ...(editingLanding.config.pas || {}),
+                                                                            [`problem${i}`]: { text: e.target.value, image }
+                                                                        }
+                                                                    }
+                                                                })}
+                                                                placeholder="ej: ¿Te sientes cansado todo el día?"
+                                                            />
+                                                        </div>
+                                                        <div className="space-y-1">
+                                                            <div className="flex justify-between items-center ml-1">
+                                                                <label className="text-[9px] font-bold text-slate-400 uppercase">Imagen (Opcional)</label>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        setOnMediaSelect(() => (url: string) => {
+                                                                            setEditingLanding((prev: any) => ({
+                                                                                ...prev,
+                                                                                config: {
+                                                                                    ...prev.config,
+                                                                                    pas: {
+                                                                                        ...(prev.config.pas || {}),
+                                                                                        [`problem${i}`]: { text, image: url }
+                                                                                    }
+                                                                                }
+                                                                            }));
+                                                                        });
+                                                                        setIsMediaModalOpen(true);
+                                                                    }}
+                                                                    className="text-emerald-600 font-black text-[9px] uppercase hover:underline"
+                                                                >Seleccionar 🖼️</button>
+                                                            </div>
+                                                            <div className="flex gap-2">
+                                                                {image && (
+                                                                    <div className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0">
+                                                                        <img src={image} className="w-full h-full object-cover" />
+                                                                    </div>
+                                                                )}
+                                                                <input
+                                                                    className="flex-1 bg-white p-3 rounded-xl border border-slate-200 focus:border-emerald-500 outline-none transition-all text-[10px] font-mono"
+                                                                    value={image}
+                                                                    onChange={e => setEditingLanding({
+                                                                        ...editingLanding,
+                                                                        config: {
+                                                                            ...editingLanding.config,
+                                                                            pas: {
+                                                                                ...(editingLanding.config.pas || {}),
+                                                                                [`problem${i}`]: { text, image: e.target.value }
+                                                                            }
+                                                                        }
+                                                                    })}
+                                                                    placeholder="URL de la imagen"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 </section>
 
                                 {/* Solutions Editor */}
                                 <section className="space-y-4">
-                                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest bg-purple-50 text-purple-600 p-2 rounded-lg inline-block">4. Soluciones Alternas</h3>
+                                    <div className="flex justify-between items-center">
+                                        <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest bg-purple-50 text-purple-600 p-2 rounded-lg inline-block">4. Soluciones Alternas</h3>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase">Títulos:</span>
+                                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                <span className="text-[10px]">📱</span>
+                                                <input
+                                                    type="text"
+                                                    className="w-10 text-[9px] outline-none font-mono"
+                                                    placeholder="1.8rem"
+                                                    value={typeof editingLanding.config?.styles?.solutionTitleSize === 'object' ? editingLanding.config.styles.solutionTitleSize.mobile || '' : ''}
+                                                    onChange={e => {
+                                                        const current = typeof editingLanding.config?.styles?.solutionTitleSize === 'object' ? editingLanding.config.styles.solutionTitleSize : {};
+                                                        setEditingLanding({
+                                                            ...editingLanding,
+                                                            config: {
+                                                                ...editingLanding.config,
+                                                                styles: {
+                                                                    ...(editingLanding.config?.styles || {}),
+                                                                    solutionTitleSize: { ...current, mobile: e.target.value }
+                                                                }
+                                                            }
+                                                        });
+                                                    }}
+                                                />
+                                            </div>
+                                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                                <span className="text-[10px]">💻</span>
+                                                <input
+                                                    type="text"
+                                                    className="w-10 text-[9px] outline-none font-mono"
+                                                    placeholder="3rem"
+                                                    value={typeof editingLanding.config?.styles?.solutionTitleSize === 'object' ? editingLanding.config.styles.solutionTitleSize.desktop || '' : (typeof editingLanding.config?.styles?.solutionTitleSize === 'string' ? editingLanding.config.styles.solutionTitleSize : '')}
+                                                    onChange={e => {
+                                                        const current = typeof editingLanding.config?.styles?.solutionTitleSize === 'object' ? editingLanding.config.styles.solutionTitleSize : { desktop: typeof editingLanding.config?.styles?.solutionTitleSize === 'string' ? editingLanding.config.styles.solutionTitleSize : '' };
+                                                        setEditingLanding({
+                                                            ...editingLanding,
+                                                            config: {
+                                                                ...editingLanding.config,
+                                                                styles: {
+                                                                    ...(editingLanding.config?.styles || {}),
+                                                                    solutionTitleSize: { ...current, desktop: e.target.value }
+                                                                }
+                                                            }
+                                                        });
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 px-1 pb-2">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-tight">Grandor de descripción:</span>
+                                        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                            <span className="text-[10px]">📱</span>
+                                            <input
+                                                type="text"
+                                                className="w-10 text-[9px] outline-none font-mono"
+                                                placeholder="1.1rem"
+                                                value={typeof editingLanding.config?.styles?.solutionTextSize === 'object' ? editingLanding.config.styles.solutionTextSize.mobile || '' : ''}
+                                                onChange={e => {
+                                                    const current = typeof editingLanding.config?.styles?.solutionTextSize === 'object' ? editingLanding.config.styles.solutionTextSize : {};
+                                                    setEditingLanding({
+                                                        ...editingLanding,
+                                                        config: {
+                                                            ...editingLanding.config,
+                                                            styles: {
+                                                                ...(editingLanding.config?.styles || {}),
+                                                                solutionTextSize: { ...current, mobile: e.target.value }
+                                                            }
+                                                        }
+                                                    });
+                                                }}
+                                            />
+                                        </div>
+                                        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                                            <span className="text-[10px]">💻</span>
+                                            <input
+                                                type="text"
+                                                className="w-10 text-[9px] outline-none font-mono"
+                                                placeholder="1.1rem"
+                                                value={typeof editingLanding.config?.styles?.solutionTextSize === 'object' ? editingLanding.config.styles.solutionTextSize.desktop || '' : (typeof editingLanding.config?.styles?.solutionTextSize === 'string' ? editingLanding.config.styles.solutionTextSize : '')}
+                                                onChange={e => {
+                                                    const current = typeof editingLanding.config?.styles?.solutionTextSize === 'object' ? editingLanding.config.styles.solutionTextSize : { desktop: typeof editingLanding.config?.styles?.solutionTextSize === 'string' ? editingLanding.config.styles.solutionTextSize : '' };
+                                                    setEditingLanding({
+                                                        ...editingLanding,
+                                                        config: {
+                                                            ...editingLanding.config,
+                                                            styles: {
+                                                                ...(editingLanding.config?.styles || {}),
+                                                                solutionTextSize: { ...current, desktop: e.target.value }
+                                                            }
+                                                        }
+                                                    });
+                                                }}
+                                            />
+                                        </div>
+                                        <div className="ml-auto">
+                                            <ResponsiveAlignmentToggle
+                                                value={editingLanding.config?.styles?.solutionAlignment}
+                                                onChange={val => setEditingLanding({
+                                                    ...editingLanding,
+                                                    config: {
+                                                        ...editingLanding.config,
+                                                        styles: {
+                                                            ...(editingLanding.config?.styles || {}),
+                                                            solutionAlignment: val
+                                                        }
+                                                    }
+                                                })}
+                                            />
+                                        </div>
+                                    </div>
                                     <div className="space-y-6">
                                         {(editingLanding.config.solutions || []).map((s: any, i: number) => (
                                             <div key={i} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
@@ -1290,6 +1784,126 @@ const AdminDashboard: React.FC = () => {
                                                 })}
                                                 placeholder="ej: ⚠️ Cupos limitados para este mes"
                                             />
+                                            <div className="flex items-center gap-2 mt-2">
+                                                <span className="text-[9px] font-black text-emerald-500/50 uppercase">Tallas Título:</span>
+                                                <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1">
+                                                    <span className="text-[10px]">📱</span>
+                                                    <input
+                                                        type="text"
+                                                        className="w-10 text-[9px] outline-none font-mono bg-transparent text-emerald-400"
+                                                        placeholder="2.2rem"
+                                                        value={typeof editingLanding.config?.styles?.ctaTitleSize === 'object' ? editingLanding.config.styles.ctaTitleSize.mobile || '' : ''}
+                                                        onChange={e => {
+                                                            const current = typeof editingLanding.config?.styles?.ctaTitleSize === 'object' ? editingLanding.config.styles.ctaTitleSize : {};
+                                                            setEditingLanding({
+                                                                ...editingLanding,
+                                                                config: {
+                                                                    ...editingLanding.config,
+                                                                    styles: {
+                                                                        ...(editingLanding.config?.styles || {}),
+                                                                        ctaTitleSize: { ...current, mobile: e.target.value }
+                                                                    }
+                                                                }
+                                                            });
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1">
+                                                    <span className="text-[10px]">💻</span>
+                                                    <input
+                                                        type="text"
+                                                        className="w-10 text-[9px] outline-none font-mono bg-transparent text-emerald-400"
+                                                        placeholder="3.7rem"
+                                                        value={typeof editingLanding.config?.styles?.ctaTitleSize === 'object' ? editingLanding.config.styles.ctaTitleSize.desktop || '' : (typeof editingLanding.config?.styles?.ctaTitleSize === 'string' ? editingLanding.config.styles.ctaTitleSize : '')}
+                                                        onChange={e => {
+                                                            const current = typeof editingLanding.config?.styles?.ctaTitleSize === 'object' ? editingLanding.config.styles.ctaTitleSize : { desktop: typeof editingLanding.config?.styles?.ctaTitleSize === 'string' ? editingLanding.config.styles.ctaTitleSize : '' };
+                                                            setEditingLanding({
+                                                                ...editingLanding,
+                                                                config: {
+                                                                    ...editingLanding.config,
+                                                                    styles: {
+                                                                        ...(editingLanding.config?.styles || {}),
+                                                                        ctaTitleSize: { ...current, desktop: e.target.value }
+                                                                    }
+                                                                }
+                                                            });
+                                                        }}
+                                                    />
+                                                </div>
+                                                <span className="text-[9px] font-black text-emerald-500/50 uppercase ml-2">Urgencia:</span>
+                                                <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1">
+                                                    <span className="text-[10px]">📱</span>
+                                                    <input
+                                                        type="text"
+                                                        className="w-10 text-[9px] outline-none font-mono bg-transparent text-emerald-400"
+                                                        placeholder="1.2rem"
+                                                        value={typeof editingLanding.config?.styles?.ctaTextSize === 'object' ? editingLanding.config.styles.ctaTextSize.mobile || '' : ''}
+                                                        onChange={e => {
+                                                            const current = typeof editingLanding.config?.styles?.ctaTextSize === 'object' ? editingLanding.config.styles.ctaTextSize : {};
+                                                            setEditingLanding({
+                                                                ...editingLanding,
+                                                                config: {
+                                                                    ...editingLanding.config,
+                                                                    styles: {
+                                                                        ...(editingLanding.config?.styles || {}),
+                                                                        ctaTextSize: { ...current, mobile: e.target.value }
+                                                                    }
+                                                                }
+                                                            });
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1">
+                                                    <span className="text-[10px]">💻</span>
+                                                    <input
+                                                        type="text"
+                                                        className="w-10 text-[9px] outline-none font-mono bg-transparent text-emerald-400"
+                                                        placeholder="1.2rem"
+                                                        value={typeof editingLanding.config?.styles?.ctaTextSize === 'object' ? editingLanding.config.styles.ctaTextSize.desktop || '' : (typeof editingLanding.config?.styles?.ctaTextSize === 'string' ? editingLanding.config.styles.ctaTextSize : '')}
+                                                        onChange={e => {
+                                                            const current = typeof editingLanding.config?.styles?.ctaTextSize === 'object' ? editingLanding.config.styles.ctaTextSize : { desktop: typeof editingLanding.config?.styles?.ctaTextSize === 'string' ? editingLanding.config.styles.ctaTextSize : '' };
+                                                            setEditingLanding({
+                                                                ...editingLanding,
+                                                                config: {
+                                                                    ...editingLanding.config,
+                                                                    styles: {
+                                                                        ...(editingLanding.config?.styles || {}),
+                                                                        ctaTextSize: { ...current, desktop: e.target.value }
+                                                                    }
+                                                                }
+                                                            });
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="flex flex-col gap-1.5 ml-4">
+                                                    <span className="text-[9px] font-black text-emerald-500/50 uppercase ml-1">Botón CTA:</span>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1">
+                                                            <span className="text-[10px]">📱</span>
+                                                            <input type="text" className="w-10 text-[9px] outline-none font-mono bg-transparent text-emerald-400" placeholder="1.1rem" value={editingLanding.config?.styles?.ctaButtonSize?.mobile || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), ctaButtonSize: { ...(editingLanding.config?.styles?.ctaButtonSize || {}), mobile: e.target.value } } } })} />
+                                                        </div>
+                                                        <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1">
+                                                            <span className="text-[10px]">💻</span>
+                                                            <input type="text" className="w-10 text-[9px] outline-none font-mono bg-transparent text-emerald-400" placeholder="1.1rem" value={editingLanding.config?.styles?.ctaButtonSize?.desktop || ''} onChange={e => setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, styles: { ...(editingLanding.config?.styles || {}), ctaButtonSize: { ...(editingLanding.config?.styles?.ctaButtonSize || {}), desktop: e.target.value } } } })} />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="ml-auto self-end">
+                                                    <ResponsiveAlignmentToggle
+                                                        value={editingLanding.config?.styles?.ctaAlignment}
+                                                        onChange={val => setEditingLanding({
+                                                            ...editingLanding,
+                                                            config: {
+                                                                ...editingLanding.config,
+                                                                styles: {
+                                                                    ...(editingLanding.config?.styles || {}),
+                                                                    ctaAlignment: val
+                                                                }
+                                                            }
+                                                        })}
+                                                    />
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </section>
@@ -1309,14 +1923,239 @@ const AdminDashboard: React.FC = () => {
                             <div className={`flex-1 overflow-y-auto bg-white border-8 border-slate-900/10 my-4 rounded-[2rem] shadow-inner transition-all duration-500 scrollbar-hide ${previewMode === 'mobile' ? 'w-[375px]' : previewMode === 'tablet' ? 'w-[768px]' : 'w-full m-0 rounded-none border-0'
                                 }`}>
                                 <div className={previewMode !== 'desktop' ? 'scale-[1] origin-top' : ''}>
-                                    <LandingPage previewData={editingLanding} />
+                                    <LandingPage
+                                        previewData={editingLanding}
+                                        isMobilePreview={previewMode === 'mobile'}
+                                    />
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div >
+                </div>
             )}
-        </div >
+
+            {/* Media Biblioteca Tab */}
+            {activeTab === 'media' && (
+                <div className="animate-fade-in p-8 space-y-8">
+                    <div className="flex justify-between items-center">
+                        <div className="flex gap-4">
+                            <button
+                                onClick={() => setMediaFilter('all')}
+                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${mediaFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}
+                            >Todo</button>
+                            <button
+                                onClick={() => setMediaFilter('image')}
+                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${mediaFilter === 'image' ? 'bg-slate-900 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}
+                            >Imágenes</button>
+                            <button
+                                onClick={() => setMediaFilter('video')}
+                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${mediaFilter === 'video' ? 'bg-slate-900 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}
+                            >Videos</button>
+                        </div>
+                        <button
+                            onClick={() => {
+                                if (!(window as any).cloudinary) {
+                                    alert('El widget de subida aún se está cargando o falló. Por favor recarga la página.');
+                                    return;
+                                }
+                                (window as any).cloudinary.openUploadWidget(
+                                    { cloudName: 'dlkky5xuo', uploadPreset: 'promedid_preset', sources: ['local', 'url'] },
+                                    async (error: any, result: any) => {
+                                        if (!error && result && result.event === "success") {
+                                            const { data, error: dbError } = await supabase.from('media').insert({
+                                                url: result.info.secure_url,
+                                                type: result.info.resource_type,
+                                                public_id: result.info.public_id,
+                                                name: result.info.original_filename || 'Nuevo Archivo'
+                                            }).select();
+                                            if (!dbError) fetchMedia();
+                                        }
+                                    }
+                                );
+                            }}
+                            className="bg-emerald-600 text-white px-6 py-3 rounded-2xl text-sm font-bold shadow-lg shadow-emerald-600/20 hover:scale-105 transition-all"
+                        >
+                            + Subir a la Biblioteca
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
+                        {media
+                            .filter(m => mediaFilter === 'all' || m.type === mediaFilter)
+                            .map(m => (
+                                <div key={m.id} className="group relative bg-white rounded-3xl overflow-hidden border border-slate-200 shadow-sm hover:shadow-xl transition-all">
+                                    <div className="aspect-square relative flex items-center justify-center bg-slate-50">
+                                        {m.type === 'image' ? (
+                                            <img src={m.url} className="w-full h-full object-cover" />
+                                        ) : (
+                                            <span className="text-4xl">🎬</span>
+                                        )}
+                                        <div className="absolute top-2 left-2 px-2 py-1 bg-slate-900/60 text-white text-[8px] font-black rounded-lg uppercase backdrop-blur-md">
+                                            {m.type}
+                                        </div>
+                                        <button
+                                            onClick={() => handleDeleteMedia(m.id, m.public_id)}
+                                            className="absolute top-2 right-2 w-8 h-8 bg-white/90 hover:bg-red-500 hover:text-white rounded-full flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-all shadow-lg"
+                                        >✕</button>
+                                    </div>
+                                    <div className="p-3">
+                                        <p className="text-[10px] font-bold text-slate-600 truncate">{m.name || 'Sin nombre'}</p>
+                                    </div>
+                                </div>
+                            ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Analytics Tab */}
+            {activeTab === 'analytics' && (
+                <div className="animate-fade-in p-8 space-y-8">
+                    <div className="flex justify-between items-center bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100">
+                        <div>
+                            <h2 className="text-2xl font-black text-slate-900">Rendimiento de Campañas</h2>
+                            <p className="text-slate-500 text-sm font-medium">Métricas integrales de visitas y conversiones</p>
+                        </div>
+                        <button
+                            onClick={fetchAnalytics}
+                            className="p-4 bg-slate-50 hover:bg-slate-100 rounded-2xl transition-all group"
+                        >
+                            <span className={`inline-block group-hover:rotate-180 transition-transform duration-500 ${isFetchingAnalytics ? 'animate-spin' : ''}`}>🔄</span>
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                        {Object.entries(analyticsEvents.reduce((acc: any, event: any) => {
+                            const key = event.landing_id;
+                            if (!acc[key]) acc[key] = { views: 0, whatsapp: 0, leads: 0, sessions: new Set(), title: key };
+                            if (event.event_type === 'view') acc[key].views++;
+                            if (event.event_type === 'click' && event.event_name === 'WhatsApp') acc[key].whatsapp++;
+                            if (event.event_type === 'click' && event.event_name === 'Lead Generated') acc[key].leads++;
+                            acc[key].sessions.add(event.session_id);
+                            return acc;
+                        }, {})).map(([slug, stats]: [string, any]) => (
+                            <div key={slug} className="bg-white p-8 rounded-[3.5rem] shadow-sm border border-slate-100 space-y-6 hover:shadow-xl transition-all">
+                                <div className="flex justify-between items-start">
+                                    <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-2xl">🚀</div>
+                                    <div className="text-right">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Página</p>
+                                        <h3 className="font-black text-slate-900 truncate max-w-[150px]">{slug}</h3>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="bg-slate-50 p-4 rounded-2xl">
+                                        <p className="text-[9px] font-black text-slate-400 uppercase">Visitas</p>
+                                        <p className="text-2xl font-black text-slate-900">{stats.views}</p>
+                                    </div>
+                                    <div className="bg-emerald-50 p-4 rounded-2xl">
+                                        <p className="text-[9px] font-black text-emerald-600 uppercase">WhatsApp</p>
+                                        <p className="text-2xl font-black text-emerald-600">{stats.whatsapp}</p>
+                                    </div>
+                                    <div className="bg-indigo-50 p-4 rounded-2xl">
+                                        <p className="text-[9px] font-black text-indigo-600 uppercase">Leads (Form)</p>
+                                        <p className="text-2xl font-black text-indigo-600">{stats.leads}</p>
+                                    </div>
+                                    <div className="bg-amber-50 p-4 rounded-2xl">
+                                        <p className="text-[9px] font-black text-amber-600 uppercase">CTR</p>
+                                        <p className="text-2xl font-black text-amber-600">
+                                            {stats.views > 0 ? (((stats.whatsapp + stats.leads) / stats.views) * 100).toFixed(1) : 0}%
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="pt-4 border-t border-slate-50 flex justify-between items-center text-[10px] font-bold text-slate-400">
+                                    <span>Sesiones Únicas: {stats.sessions.size}</span>
+                                    <span className="bg-slate-100 px-2 py-1 rounded-lg uppercase tracking-widest">En Vivo</span>
+                                </div>
+                            </div>
+                        ))}
+
+                        {analyticsEvents.length === 0 && !isFetchingAnalytics && (
+                            <div className="col-span-full py-20 text-center bg-white rounded-[3.5rem] border-2 border-dashed border-slate-100">
+                                <span className="text-4xl mb-4 block">📈</span>
+                                <h3 className="font-bold text-slate-900">No hay datos aún</h3>
+                                <p className="text-slate-500 text-sm">Las estadísticas aparecerán cuando los pacientes visiten tus páginas.</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Global Media Selection Modal */}
+            {isMediaModalOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-fade-in">
+                    <div className="bg-white w-full max-w-5xl h-[80vh] rounded-[3rem] shadow-2xl flex flex-col overflow-hidden">
+                        <div className="p-8 border-b border-slate-100 flex justify-between items-center">
+                            <div>
+                                <h3 className="text-xl font-bold text-slate-900">Seleccionar Medio</h3>
+                                <p className="text-xs text-slate-500 mt-1">Biblioteca de Cloudinary</p>
+                            </div>
+                            <button
+                                onClick={() => setIsMediaModalOpen(false)}
+                                className="w-10 h-10 border border-slate-100 rounded-full flex items-center justify-center hover:bg-slate-50 transition-all"
+                            >✕</button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-8">
+                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                                {media.map(m => (
+                                    <button
+                                        key={m.id}
+                                        onClick={() => {
+                                            onMediaSelect(m.url);
+                                            setIsMediaModalOpen(false);
+                                        }}
+                                        className="group relative bg-slate-50 rounded-3xl overflow-hidden border-2 border-transparent hover:border-emerald-500 transition-all text-left"
+                                    >
+                                        <div className="aspect-square relative flex items-center justify-center">
+                                            {m.type === 'image' ? (
+                                                <img src={m.url} className="w-full h-full object-cover" />
+                                            ) : (
+                                                <span className="text-4xl">🎬</span>
+                                            )}
+                                        </div>
+                                        <div className="p-3 bg-white">
+                                            <p className="text-[10px] font-bold text-slate-600 truncate">{m.name || 'Sin nombre'}</p>
+                                        </div>
+                                    </button>
+                                ))}
+                                {/* Botón para subir nuevo directamente desde el modal */}
+                                <button
+                                    onClick={() => {
+                                        if (!(window as any).cloudinary) {
+                                            alert('El widget de subida aún se está cargando. Por favor espera un momento.');
+                                            return;
+                                        }
+                                        (window as any).cloudinary.openUploadWidget(
+                                            { cloudName: 'dlkky5xuo', uploadPreset: 'promedid_preset', sources: ['local', 'url'] },
+                                            async (error: any, result: any) => {
+                                                if (!error && result && result.event === "success") {
+                                                    const { data, error: dbError } = await supabase.from('media').insert({
+                                                        url: result.info.secure_url,
+                                                        type: result.info.resource_type,
+                                                        public_id: result.info.public_id,
+                                                        name: result.info.original_filename || 'Nuevo Archivo'
+                                                    }).select();
+                                                    if (!dbError) {
+                                                        fetchMedia();
+                                                        onMediaSelect(result.info.secure_url);
+                                                        setIsMediaModalOpen(false);
+                                                    }
+                                                }
+                                            }
+                                        );
+                                    }}
+                                    className="aspect-square border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-2 hover:border-emerald-500 hover:bg-emerald-50 transition-all group"
+                                >
+                                    <span className="text-2xl group-hover:scale-110 transition-transform">➕</span>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase">Subir Nuevo</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
     );
 };
 

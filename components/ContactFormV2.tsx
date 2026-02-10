@@ -3,9 +3,11 @@ import { supabase } from '../lib/supabase';
 
 interface ContactFormV2Props {
     source?: string;
+    buttonStyle?: React.CSSProperties;
+    onSuccess?: () => void;
 }
 
-const ContactFormV2: React.FC<ContactFormV2Props> = ({ source = 'Landing Page' }) => {
+const ContactFormV2: React.FC<ContactFormV2Props> = ({ source = 'Landing Page', buttonStyle, onSuccess }) => {
     const [formData, setFormData] = useState({
         name: '',
         phone: '',
@@ -13,6 +15,13 @@ const ContactFormV2: React.FC<ContactFormV2Props> = ({ source = 'Landing Page' }
         message: ''
     });
     const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+    const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value.replace(/\D/g, ''); // Solo números
+        if (val.length <= 12) { // Límite razonable para WhatsApp incl. prefijo
+            setFormData({ ...formData, phone: '+' + val });
+        }
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -28,8 +37,24 @@ const ContactFormV2: React.FC<ContactFormV2Props> = ({ source = 'Landing Page' }
                 }]);
 
             if (error) throw error;
+
+            // Track conversion
+            try {
+                const sid = sessionStorage.getItem('promedid_sid') || 'unknown';
+                await supabase.from('analytics_events').insert({
+                    landing_id: window.location.hash.split('/')[1] || source,
+                    event_type: 'click',
+                    event_name: 'Lead Generated',
+                    session_id: sid,
+                    metadata: { source, email: formData.email }
+                });
+            } catch (trackErr) {
+                console.warn('Analytics capture failed:', trackErr);
+            }
+
             setStatus('success');
             setFormData({ name: '', phone: '', email: '', message: '' });
+            if (onSuccess) onSuccess();
         } catch (err) {
             console.error('Error submitting form:', err);
             setStatus('error');
@@ -67,7 +92,7 @@ const ContactFormV2: React.FC<ContactFormV2Props> = ({ source = 'Landing Page' }
                         type="tel"
                         className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-transparent focus:border-emerald-500 focus:bg-white outline-none transition-all"
                         value={formData.phone}
-                        onChange={e => setFormData({ ...formData, phone: e.target.value })}
+                        onChange={handlePhoneChange}
                         placeholder="+57..."
                     />
                 </div>
@@ -95,7 +120,8 @@ const ContactFormV2: React.FC<ContactFormV2Props> = ({ source = 'Landing Page' }
             </div>
             <button
                 disabled={status === 'loading'}
-                className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black text-lg hover:bg-emerald-600 transition-all shadow-xl shadow-slate-900/10 active:scale-[0.98]"
+                className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black hover:bg-emerald-600 transition-all shadow-xl shadow-slate-900/10 active:scale-[0.98]"
+                style={buttonStyle}
             >
                 {status === 'loading' ? 'Enviando...' : '🚀 Solicitar Valoración Gratuita'}
             </button>

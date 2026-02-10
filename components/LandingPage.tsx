@@ -5,23 +5,80 @@ import ContactFormV2 from './ContactFormV2';
 interface LandingPageProps {
     slug?: string;
     previewData?: any;
+    isMobilePreview?: boolean;
 }
 
-const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
-    const [landing, setLanding] = useState<any>(null);
+const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData, isMobilePreview }) => {
+    const [fetchedLanding, setFetchedLanding] = useState<any>(null);
+    const landing = previewData || fetchedLanding;
+
     const [ctaItem, setCtaItem] = useState<any>(null);
     const [loading, setLoading] = useState(!previewData);
     const [isScrolled, setIsScrolled] = useState(false);
+    const [formSubmitted, setFormSubmitted] = useState(false);
+    const [sessionId] = useState(() => {
+        if (typeof window === 'undefined') return '';
+        let sid = sessionStorage.getItem('promedid_sid');
+        if (!sid) {
+            sid = 'sid_' + Math.random().toString(36).substring(2, 15);
+            sessionStorage.setItem('promedid_sid', sid);
+        }
+        return sid;
+    });
+
+    const trackEvent = async (type: string, name?: string, metadata: any = {}) => {
+        if (previewData) return; // Don't track previews
+        try {
+            await supabase.from('analytics_events').insert({
+                landing_id: slug || landing?.slug,
+                event_type: type,
+                event_name: name,
+                session_id: sessionId,
+                metadata: {
+                    ...metadata,
+                    url: window.location.href,
+                    userAgent: navigator.userAgent
+                }
+            });
+        } catch (err) {
+            console.error('Analytics error:', err);
+        }
+    };
 
     useEffect(() => {
         const handleScroll = () => setIsScrolled(window.scrollY > 50);
         window.addEventListener('scroll', handleScroll);
-        return () => window.removeEventListener('scroll', handleScroll);
-    }, []);
+
+        // Track Page View
+        if (landing?.slug || slug) {
+            trackEvent('view');
+        }
+
+        // Track Session End
+        const startTime = Date.now();
+        const handleBeforeUnload = () => {
+            const duration = Math.round((Date.now() - startTime) / 1000);
+            const data = JSON.stringify({
+                landing_id: slug || landing?.slug,
+                event_type: 'session_end',
+                session_id: sessionId,
+                metadata: { duration_seconds: duration }
+            });
+            // Use sendBeacon for reliable tracking on exit
+            const blob = new Blob([data], { type: 'application/json' });
+            navigator.sendBeacon(`${(supabase as any).supabaseUrl}/rest/v1/analytics_events`, blob);
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        return () => {
+            window.removeEventListener('scroll', handleScroll);
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+        };
+    }, [landing?.slug, slug]);
 
     useEffect(() => {
         if (previewData) {
-            setLanding(previewData);
             setLoading(false);
             return;
         }
@@ -34,9 +91,13 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                 .select('*')
                 .eq('slug', slug)
                 .eq('is_active', true)
-                .single();
+                .maybeSingle();
 
-            if (!error && data) {
+            if (error) {
+                console.error('Error fetching landing:', error);
+            }
+
+            if (data) {
                 // Initialize default config if fields are missing
                 const config = {
                     hero: { subtitle: '', imageUrl: '', ...data.config?.hero },
@@ -76,7 +137,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                 };
 
                 const enrichedLanding = { ...data, config };
-                setLanding(enrichedLanding);
+                setFetchedLanding(enrichedLanding);
 
                 // Fetch CTA Item
                 if (config.cta.id) {
@@ -97,6 +158,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
     }, [slug, previewData]);
 
     const handleWhatsApp = () => {
+        trackEvent('click', 'WhatsApp');
         const number = landing.config?.whatsapp_number || '573112345678';
         const defaultMessage = `Hola! Vengo de la página ${landing?.title}. Quiero reservar mi cita.`;
         const message = landing.config?.whatsapp_message || defaultMessage;
@@ -125,6 +187,83 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
         hero: true, pas: true, solutions: true, socialProof: true, cta: true, footer: true, whatsapp: true
     };
 
+    // Helper para obtener tamaños de fuente
+    const getFontSize = (val: any, device: 'mobile' | 'desktop', def: string) => {
+        if (!val) return def;
+        if (typeof val === 'string') return val;
+        if (typeof val === 'object') return val[device] || val.mobile || val.desktop || def;
+        return def;
+    };
+
+    // Helper para obtener estilo de fuente responsivo o forzado
+    const getAlignment = (val: any, defaultAlign: string = 'center') => {
+        const mobile = (typeof val === 'object' ? val.mobile : val) || defaultAlign;
+        const desktop = (typeof val === 'object' ? val.desktop : val) || defaultAlign;
+
+        const mobileFlex = mobile === 'center' ? 'items-center text-center' : mobile === 'left' ? 'items-start text-left' : 'items-end text-right';
+        const desktopFlex = desktop === 'center' ? 'md:items-center md:text-center' : desktop === 'left' ? 'md:items-start md:text-left' : 'md:items-end md:text-right';
+
+        if (isMobilePreview) return mobileFlex;
+        return `${mobileFlex} ${desktopFlex}`;
+    };
+
+    const getElementStyle = (val: any, desktopDef: string, mobileDef: string) => {
+        const desktopSize = getFontSize(val, 'desktop', desktopDef);
+        const mobileSize = getFontSize(val, 'mobile', mobileDef);
+
+        // Si estamos en previsualización móvil, forzamos el tamaño móvil
+        if (isMobilePreview) return { fontSize: mobileSize };
+
+        // En vista normal/escritorio, usamos variables CSS para que los media queries de Tailwind funcionen
+        // Pero para asegurar reactividad total en preview desktop, también podemos inyectar el valor directo
+        return {
+            fontSize: `var(--current-size)`,
+            '--current-size': mobileSize,
+            '--desktop-size': desktopSize
+        } as any;
+    };
+
+    // Estilos inyectados directamente para saltar limitaciones de media queries en preview
+    const heroTitleStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.heroTitleSize, 'mobile', '2.25rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.heroTitleSize, 'desktop', '4.5rem') };
+
+    const heroSubtitleStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.heroSubtitleSize, 'mobile', '1.1rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.heroSubtitleSize, 'desktop', '1.25rem') };
+
+    const pasTitleStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.pasTitleSize, 'mobile', '1.8rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.pasTitleSize, 'desktop', '3rem') };
+
+    const pasProblemStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.pasProblemSize, 'mobile', '1.1rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.pasProblemSize, 'desktop', '1.1rem') };
+
+    const solTitleStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.solutionTitleSize, 'mobile', '1.8rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.solutionTitleSize, 'desktop', '3rem') };
+
+    const solTextStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.solutionTextSize, 'mobile', '1.1rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.solutionTextSize, 'desktop', '1.1rem') };
+
+    const ctaTitleStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.ctaTitleSize, 'mobile', '2.2rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.ctaTitleSize, 'desktop', '3.7rem') };
+
+    const ctaTextStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.ctaTextSize, 'mobile', '1.2rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.ctaTextSize, 'desktop', '1.2rem') };
+
+    const heroButtonStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.heroButtonSize, 'mobile', '1.125rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.heroButtonSize, 'desktop', '1.125rem') };
+
+    const ctaButtonStyle = isMobilePreview
+        ? { fontSize: getFontSize(landing.config?.styles?.ctaButtonSize, 'mobile', '0.875rem') }
+        : { fontSize: getFontSize(landing.config?.styles?.ctaButtonSize, 'desktop', '0.875rem') };
+
     return (
         <div className="min-h-screen bg-white font-sans selection:bg-emerald-100 selection:text-emerald-900">
             {/* 1. Header Fijo */}
@@ -136,7 +275,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                     </div>
                     <button
                         onClick={handleWhatsApp}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-full font-black text-sm transition-all shadow-lg shadow-emerald-600/20 active:scale-95"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-full font-black transition-all shadow-lg shadow-emerald-600/20 active:scale-95"
+                        style={ctaButtonStyle}
                     >
                         RESERVA AHORA
                     </button>
@@ -148,27 +288,28 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                 <section className="pt-24 pb-12 md:pt-48 md:pb-32 bg-gradient-to-br from-slate-50 to-white overflow-hidden">
                     <div className="container mx-auto px-6">
                         <div className="flex flex-col md:flex-row items-center gap-16 lg:gap-24">
-                            <div className="md:w-3/5 space-y-8 animate-fade-in-right">
+                            <div className={`md:w-3/5 space-y-8 animate-fade-in-right flex flex-col ${getAlignment(landing.config?.styles?.heroAlignment, 'left')}`}>
                                 <span className="inline-block bg-emerald-100 text-emerald-700 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest">
                                     ✨ Medicina Integral Avanzada
                                 </span>
                                 <h1
                                     className="text-4xl md:text-5xl lg:text-7xl font-black text-slate-900 leading-[1.1] md:leading-[1.05] tracking-tight"
-                                    style={{
-                                        fontSize: landing.config?.styles?.heroTitleSize || undefined,
-                                        lineHeight: landing.config?.styles?.heroTitleSize ? '1.2' : undefined
-                                    }}
+                                    style={heroTitleStyle}
                                 >
                                     {landing.title}
                                 </h1>
                                 <p
-                                    className="text-xl text-slate-500 leading-relaxed max-w-2xl"
-                                    style={{ fontSize: landing.config?.styles?.heroSubtitleSize || undefined }}
+                                    className="text-slate-500 leading-relaxed max-w-2xl"
+                                    style={heroSubtitleStyle}
                                 >
                                     {landing.config?.hero?.subtitle}
                                 </p>
-                                <div className="flex flex-col sm:flex-row gap-4 pt-4">
-                                    <button onClick={handleWhatsApp} className="bg-slate-900 text-white px-10 py-5 rounded-2xl font-black text-lg hover:bg-emerald-600 transition-all shadow-xl shadow-slate-900/10">
+                                <div className={`flex flex-col sm:flex-row gap-4 pt-4 ${getAlignment(landing.config?.styles?.heroAlignment, 'left')}`}>
+                                    <button
+                                        onClick={handleWhatsApp}
+                                        className="bg-slate-900 text-white px-10 py-5 rounded-2xl font-black hover:bg-emerald-600 transition-all shadow-xl shadow-slate-900/10 active:scale-95"
+                                        style={heroButtonStyle}
+                                    >
                                         ¡Quiero mi Valoración!
                                     </button>
                                     <div className="flex items-center gap-3 px-2">
@@ -182,11 +323,26 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                             <div className="md:w-2/5 w-full animate-fade-in-left">
                                 <div className="relative group">
                                     <div className="absolute -inset-4 bg-emerald-500/10 rounded-[3rem] blur-2xl group-hover:bg-emerald-500/20 transition-all"></div>
-                                    <img
-                                        src={landing.config?.hero?.imageUrl || 'https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?auto=format&fit=crop&q=80&w=1000'}
-                                        className="relative rounded-[2.5rem] shadow-2xl border-4 md:border-8 border-white object-cover aspect-[4/5] w-full"
-                                        alt="Hero"
-                                    />
+                                    {landing.config?.hero?.videoThumbnail ? (
+                                        <div className="relative cursor-pointer" onClick={() => window.open(landing.config.hero.videoUrl, '_blank')}>
+                                            <img
+                                                src={landing.config.hero.videoThumbnail}
+                                                className="rounded-[2.5rem] shadow-2xl border-4 md:border-8 border-white object-cover aspect-[4/5] w-full"
+                                                alt="Video Thumbnail"
+                                            />
+                                            <div className="absolute inset-0 flex items-center justify-center">
+                                                <div className="w-20 h-20 bg-emerald-500/90 rounded-full flex items-center justify-center text-white shadow-2xl scale-100 group-hover:scale-110 transition-all">
+                                                    <span className="text-3xl ml-1">▶</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <img
+                                            src={landing.config?.hero?.imageUrl || 'https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?auto=format&fit=crop&q=80&w=1000'}
+                                            className="relative rounded-[2.5rem] shadow-2xl border-4 md:border-8 border-white object-cover aspect-[4/5] w-full"
+                                            alt="Hero"
+                                        />
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -198,10 +354,10 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
             {visibility.pas && (
                 <section className="py-16 md:py-24 bg-white border-y border-slate-50">
                     <div className="container mx-auto px-6">
-                        <div className="max-w-3xl mx-auto text-center mb-16 space-y-4">
+                        <div className={`max-w-3xl mx-auto mb-16 space-y-4 flex flex-col ${getAlignment(landing.config?.styles?.pasAlignment)}`}>
                             <h2
                                 className="text-3xl md:text-5xl font-black text-slate-900"
-                                style={{ fontSize: landing.config?.styles?.pasTitleSize || undefined }}
+                                style={pasTitleStyle}
                             >
                                 ¿Te sientes identificado con esto?
                             </h2>
@@ -212,17 +368,30 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                                 landing.config?.pas?.problem1,
                                 landing.config?.pas?.problem2,
                                 landing.config?.pas?.problem3
-                            ].map((p, i) => p && (
-                                <div key={i} className="group p-10 bg-slate-50 rounded-[2.5rem] border border-transparent hover:border-slate-200 transition-all hover:bg-white hover:shadow-2xl">
-                                    <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-3xl mb-8 shadow-sm group-hover:bg-red-50 group-hover:scale-110 transition-all">⚠️</div>
-                                    <p
-                                        className="text-lg font-bold text-slate-800 leading-snug"
-                                        style={{ fontSize: landing.config?.styles?.pasProblemSize || undefined }}
-                                    >
-                                        {p}
-                                    </p>
-                                </div>
-                            ))}
+                            ].map((p: any, i) => {
+                                if (!p) return null;
+
+                                const text = typeof p === 'object' ? p.text : p;
+                                const image = typeof p === 'object' ? p.image : null;
+
+                                return (
+                                    <div key={i} className={`group p-8 md:p-10 bg-slate-50 rounded-[2.5rem] border border-transparent hover:border-slate-200 transition-all hover:bg-white hover:shadow-2xl flex flex-col ${getAlignment(landing.config?.styles?.pasAlignment)}`}>
+                                        {image ? (
+                                            <div className="w-full aspect-video rounded-3xl overflow-hidden mb-8 shadow-sm">
+                                                <img src={image} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt={text} />
+                                            </div>
+                                        ) : (
+                                            <div className={`w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-3xl mb-8 shadow-sm group-hover:bg-red-50 group-hover:scale-110 transition-all`}>⚠️</div>
+                                        )}
+                                        <p
+                                            className="text-lg font-bold text-slate-800 leading-snug"
+                                            style={pasProblemStyle}
+                                        >
+                                            {text}
+                                        </p>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 </section>
@@ -234,17 +403,17 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                     <div className="container mx-auto px-6 space-y-32">
                         {landing.config.solutions.map((s: any, i: number) => (
                             <div key={i} className={`flex flex-col ${i % 2 === 0 ? 'md:flex-row' : 'md:flex-row-reverse'} items-center gap-16 lg:gap-24`}>
-                                <div className="md:w-1/2 space-y-6">
+                                <div className={`md:w-1/2 space-y-6 flex flex-col ${getAlignment(landing.config?.styles?.solutionAlignment, 'left')}`}>
                                     <div className="w-12 h-1.5 bg-emerald-500 rounded-full"></div>
                                     <h3
                                         className="text-3xl md:text-5xl font-black text-slate-900 leading-tight"
-                                        style={{ fontSize: landing.config?.styles?.solutionTitleSize || undefined }}
+                                        style={solTitleStyle}
                                     >
                                         {s.title}
                                     </h3>
                                     <p
                                         className="text-lg text-slate-500 leading-relaxed"
-                                        style={{ fontSize: landing.config?.styles?.solutionTextSize || undefined }}
+                                        style={solTextStyle}
                                     >
                                         {s.text}
                                     </p>
@@ -300,12 +469,15 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
             {visibility.cta && (
                 <section id="cta-section" className="py-16 md:py-24 bg-slate-900 text-white relative overflow-hidden">
                     <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(16,185,129,0.1),transparent)] pointer-events-none"></div>
-                    <div className="container mx-auto px-6 text-center max-w-4xl relative z-10 space-y-10">
-                        <div className="bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 px-6 py-2 rounded-full inline-block font-black text-xs tracking-widest uppercase">
+                    <div className={`container mx-auto px-6 max-w-4xl relative z-10 space-y-10 flex flex-col ${getAlignment(landing.config?.styles?.ctaAlignment)}`}>
+                        <div className={`bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 px-6 py-2 rounded-full inline-block font-black text-xs tracking-widest uppercase`}>
                             {landing.config?.cta?.urgencyText}
                         </div>
-                        <h2 className="text-4xl md:text-6xl font-black leading-tight">¿Listo para transformar tu bienestar?</h2>
-                        <p className="text-slate-400 text-xl font-medium">Solicita tu valoración inicial hoy y comienza tu camino a una vida más saludable.</p>
+                        <h2 className="text-4xl md:text-6xl font-black leading-tight" style={ctaTitleStyle}>¿Listo para transformar tu bienestar?</h2>
+                        <p className="text-xl text-slate-400 font-medium" style={ctaTextStyle}>Solicita tu valoración inicial hoy y comienza tu camino a una vida más saludable.</p>
+                        <p className="hidden text-xl text-emerald-100/80 max-w-2xl mx-auto">
+                            {landing.config?.cta?.urgencyText || 'Reserva tu cita hoy mismo y empieza tu camino hacia el bienestar total.'}
+                        </p>
 
                         <div className="grid md:grid-cols-2 gap-12 text-left bg-white/5 p-8 md:p-12 rounded-[3.5rem] border border-white/5 backdrop-blur-sm">
                             <div className="space-y-6">
@@ -317,7 +489,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                                     <span>✓ Protocolos médicos certificados</span>
                                 </div>
                             </div>
-                            <ContactFormV2 source={landing.title} />
+                            <ContactFormV2
+                                source={landing.title}
+                                buttonStyle={ctaButtonStyle}
+                                onSuccess={() => setFormSubmitted(true)}
+                            />
                         </div>
                     </div>
                 </section>
@@ -367,8 +543,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ slug, previewData }) => {
                 </footer>
             )}
 
-            {/* 8. WhatsApp Flotante */}
-            {visibility.whatsapp && (
+            {/* 8. WhatsApp Flotante (Sticky logic: show only after form submission if configured) */}
+            {visibility.whatsapp && (formSubmitted || !landing.config?.sticky_whatsapp) && (
                 <button
                     onClick={handleWhatsApp}
                     className="fixed bottom-8 right-8 z-[100] bg-[#25D366] text-white w-16 h-16 rounded-full shadow-[0_20px_50px_rgba(37,211,102,0.3)] flex items-center justify-center text-3xl hover:scale-110 active:scale-95 transition-all group"
