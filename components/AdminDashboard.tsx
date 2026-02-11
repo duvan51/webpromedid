@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { uploadImage } from '../utils/cloudinary';
 import LandingPage from './LandingPage';
 
-type AdminTab = 'products' | 'offers' | 'packages' | 'landings' | 'media' | 'analytics' | 'widgets';
+type AdminTab = 'products' | 'offers' | 'packages' | 'landings' | 'media' | 'analytics' | 'widgets' | 'locations';
 
 const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; label?: string; onOpenLibrary?: () => void }> = ({ value, onChange, label, onOpenLibrary }) => {
     const [isUploading, setIsUploading] = useState(false);
@@ -149,6 +149,9 @@ const AdminDashboard: React.FC = () => {
     const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all');
     const [analyticsEvents, setAnalyticsEvents] = useState<any[]>([]);
     const [isFetchingAnalytics, setIsFetchingAnalytics] = useState(false);
+    const [locations, setLocations] = useState<any[]>([]);
+    const [editingLocation, setEditingLocation] = useState<any>(null);
+    const [isLoadingLocations, setIsLoadingLocations] = useState(false);
 
     useEffect(() => {
         const savedSession = localStorage.getItem('promedid_admin_session');
@@ -163,6 +166,7 @@ const AdminDashboard: React.FC = () => {
             fetchBundles();
             fetchLandings();
             fetchMedia();
+            fetchLocations();
         }
     }, [isLoggedIn]);
 
@@ -256,7 +260,44 @@ const AdminDashboard: React.FC = () => {
 
     useEffect(() => {
         if (activeTab === 'analytics') fetchAnalytics();
+        if (activeTab === 'locations') fetchLocations();
     }, [activeTab]);
+
+    const fetchLocations = async () => {
+        setIsLoadingLocations(true);
+        const { data, error } = await supabase.from('locations').select('*').order('city', { ascending: true });
+        if (!error && data) setLocations(data);
+        setIsLoadingLocations(false);
+    };
+
+    const handleSaveLocation = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            const { error } = await supabase.from('locations').upsert({
+                id: editingLocation.id.toString().startsWith('nuevo') ? undefined : editingLocation.id,
+                city: editingLocation.city,
+                name: editingLocation.name,
+                address: editingLocation.address,
+                phone: editingLocation.phone,
+                active: editingLocation.active,
+                slots_total: editingLocation.slots_total,
+                slots_booked: editingLocation.slots_booked
+            });
+
+            if (error) throw error;
+            alert('Sede guardada correctamente');
+            setEditingLocation(null);
+            fetchLocations();
+        } catch (err: any) {
+            alert('Error al guardar sede: ' + err.message);
+        }
+    };
+
+    const handleDeleteLocation = async (id: string) => {
+        if (!confirm('¿Eliminar esta sede?')) return;
+        const { error } = await supabase.from('locations').delete().eq('id', id);
+        if (!error) fetchLocations();
+    };
 
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
@@ -489,6 +530,7 @@ const AdminDashboard: React.FC = () => {
                     <SidebarItem id="landings" label="Páginas de Venta" icon="🚀" />
                     <SidebarItem id="media" label="Biblioteca" icon="🖼️" />
                     <SidebarItem id="analytics" label="Estadísticas" icon="📊" />
+                    <SidebarItem id="locations" label="Gestión de Sedes" icon="📍" />
                     <SidebarItem id="widgets" label="Widgets" icon="🛠️" />
                 </nav>
 
@@ -520,6 +562,7 @@ const AdminDashboard: React.FC = () => {
                             {activeTab === 'packages' && 'Paquetes de Valoración'}
                             {activeTab === 'landings' && 'Embudos de Venta (Landings)'}
                             {activeTab === 'media' && 'Biblioteca de Medios'}
+                            {activeTab === 'locations' && 'Configuración de Sedes'}
                             {activeTab === 'widgets' && 'Configuración de Widgets'}
                         </h2>
                         <p className="text-xs text-slate-500 mt-1 capitalize">{activeTab} management system</p>
@@ -531,6 +574,16 @@ const AdminDashboard: React.FC = () => {
                             className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-emerald-600-20 transition-all flex items-center gap-2"
                         >
                             <span>+</span> Nuevo Producto
+                        </button>
+                    )}
+
+
+                    {activeTab === 'locations' && (
+                        <button
+                            onClick={() => setEditingLocation({ id: 'nuevo-' + Date.now(), city: 'Bogotá', name: '', address: '', phone: '', active: true, slots_total: 30, slots_booked: 0 })}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-emerald-600-20 transition-all flex items-center gap-2"
+                        >
+                            <span>+</span> Nueva Sede
                         </button>
                     )}
                 </header>
@@ -783,6 +836,50 @@ const AdminDashboard: React.FC = () => {
                     {activeTab === 'widgets' && (
                         <div className="animate-fade-in py-12 text-center bg-white rounded-3xl border border-dashed border-slate-200">
                             <p className="text-slate-400 font-medium">Próximamente: Personalización de Botón de WhatsApp y Popups</p>
+                        </div>
+                    )}
+
+                    {activeTab === 'locations' && (
+                        <div className="animate-fade-in space-y-6">
+                            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {locations.map(loc => (
+                                    <div key={loc.id} className={`bg-white p-6 rounded-3xl border transition-all ${loc.active ? 'border-slate-200 shadow-sm' : 'border-red-100 bg-red-50/20 opacity-75'}`}>
+                                        <div className="flex justify-between items-start mb-4">
+                                            <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center font-bold">📍</div>
+                                            <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${loc.active ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                                {loc.active ? 'Activa' : 'Inactiva'}
+                                            </span>
+                                        </div>
+                                        <h4 className="font-bold text-slate-900 text-lg mb-1">{loc.name}</h4>
+                                        <p className="text-emerald-600 text-xs font-bold mb-3">{loc.city}</p>
+                                        <p className="text-slate-500 text-sm mb-4">{loc.address}</p>
+
+                                        <div className="bg-slate-50 p-4 rounded-2xl mb-6 flex justify-between items-center">
+                                            <div>
+                                                <p className="text-[10px] font-black text-slate-400 uppercase">Disponibilidad</p>
+                                                <p className="text-sm font-bold text-slate-900">{loc.slots_total - loc.slots_booked} / {loc.slots_total} Cupos</p>
+                                            </div>
+                                            <div className="w-12 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                                <div
+                                                    className={`h-full transition-all ${((loc.slots_booked / loc.slots_total) * 100) > 80 ? 'bg-red-500' : 'bg-emerald-500'}`}
+                                                    style={{ width: `${(loc.slots_booked / loc.slots_total) * 100}%` }}
+                                                ></div>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setEditingLocation(loc)} className="flex-1 py-3 text-xs font-bold bg-slate-900 text-white rounded-xl">Editar Sede</button>
+                                            <button onClick={() => handleDeleteLocation(loc.id)} className="px-3 py-3 text-xs font-bold text-red-500 hover:bg-red-50 rounded-xl">✕</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {locations.length === 0 && (
+                                <div className="py-20 text-center bg-white rounded-4xl border border-dashed border-slate-200">
+                                    <p className="text-slate-400 font-medium italic">No hay sedes configuradas todavía</p>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -2082,76 +2179,107 @@ const AdminDashboard: React.FC = () => {
             )}
 
             {/* Global Media Selection Modal */}
-            {isMediaModalOpen && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-fade-in">
-                    <div className="bg-white w-full max-w-5xl h-[80vh] rounded-[3rem] shadow-2xl flex flex-col overflow-hidden">
-                        <div className="p-8 border-b border-slate-100 flex justify-between items-center">
+            {/* Modal de Edición de Sedes */}
+            {editingLocation && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setEditingLocation(null)}></div>
+                    <div className="relative bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-8 max-h-[90vh] overflow-y-auto animate-scale-in">
+                        <div className="flex justify-between items-start mb-6">
                             <div>
-                                <h3 className="text-xl font-bold text-slate-900">Seleccionar Medio</h3>
-                                <p className="text-xs text-slate-500 mt-1">Biblioteca de Cloudinary</p>
+                                <h2 className="text-2xl font-black text-slate-900">Configurar Sede</h2>
+                                <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">Ubicación y Disponibilidad</p>
                             </div>
-                            <button
-                                onClick={() => setIsMediaModalOpen(false)}
-                                className="w-10 h-10 border border-slate-100 rounded-full flex items-center justify-center hover:bg-slate-50 transition-all"
-                            >✕</button>
+                            <button onClick={() => setEditingLocation(null)} className="text-slate-400 hover:text-slate-900 transition-colors">✕</button>
                         </div>
 
-                        <div className="flex-1 overflow-y-auto p-8">
-                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                                {media.map(m => (
-                                    <button
-                                        key={m.id}
-                                        onClick={() => {
-                                            onMediaSelect(m.url);
-                                            setIsMediaModalOpen(false);
-                                        }}
-                                        className="group relative bg-slate-50 rounded-3xl overflow-hidden border-2 border-transparent hover:border-emerald-500 transition-all text-left"
-                                    >
-                                        <div className="aspect-square relative flex items-center justify-center">
-                                            {m.type === 'image' ? (
-                                                <img src={m.url} className="w-full h-full object-cover" />
-                                            ) : (
-                                                <span className="text-4xl">🎬</span>
-                                            )}
-                                        </div>
-                                        <div className="p-3 bg-white">
-                                            <p className="text-[10px] font-bold text-slate-600 truncate">{m.name || 'Sin nombre'}</p>
-                                        </div>
-                                    </button>
-                                ))}
-                                {/* Botón para subir nuevo directamente desde el modal */}
+                        <form onSubmit={handleSaveLocation} className="space-y-6">
+                            <div className="grid md:grid-cols-2 gap-4">
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Ciudad</label>
+                                    <input
+                                        type="text"
+                                        className="w-full bg-slate-50 p-4 rounded-2xl border-none outline-none text-sm font-bold"
+                                        value={editingLocation.city}
+                                        onChange={e => setEditingLocation({ ...editingLocation, city: e.target.value })}
+                                        placeholder="Ej: Bogotá"
+                                        required
+                                    />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Nombre de Sede</label>
+                                    <input
+                                        type="text"
+                                        className="w-full bg-slate-50 p-4 rounded-2xl border-none outline-none text-sm font-bold"
+                                        value={editingLocation.name}
+                                        onChange={e => setEditingLocation({ ...editingLocation, name: e.target.value })}
+                                        placeholder="Ej: Sede Norte"
+                                        required
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Dirección Completa</label>
+                                <input
+                                    type="text"
+                                    className="w-full bg-slate-50 p-4 rounded-2xl border-none outline-none text-sm font-bold"
+                                    value={editingLocation.address}
+                                    onChange={e => setEditingLocation({ ...editingLocation, address: e.target.value })}
+                                    placeholder="Calle 123 #45-67..."
+                                    required
+                                />
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Teléfono de Contacto</label>
+                                <input
+                                    type="text"
+                                    className="w-full bg-slate-50 p-4 rounded-2xl border-none outline-none text-sm font-bold"
+                                    value={editingLocation.phone}
+                                    onChange={e => setEditingLocation({ ...editingLocation, phone: e.target.value })}
+                                    placeholder="+57..."
+                                />
+                            </div>
+
+                            <div className="bg-emerald-50 p-6 rounded-[2rem] space-y-4">
+                                <h4 className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Gestión de Cupos</h4>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-bold text-emerald-800 ml-1">Cupos Totales</label>
+                                        <input
+                                            type="number"
+                                            className="w-full bg-white p-3 rounded-xl border-none outline-none text-sm font-bold"
+                                            value={editingLocation.slots_total}
+                                            onChange={e => setEditingLocation({ ...editingLocation, slots_total: parseInt(e.target.value) })}
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-bold text-emerald-800 ml-1">Cupos Agendados</label>
+                                        <input
+                                            type="number"
+                                            className="w-full bg-white p-3 rounded-xl border-none outline-none text-sm font-bold"
+                                            value={editingLocation.slots_booked}
+                                            onChange={e => setEditingLocation({ ...editingLocation, slots_booked: parseInt(e.target.value) })}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl">
+                                <span className="text-xs font-bold text-slate-600 uppercase tracking-tight">Estado de la Sede</span>
                                 <button
-                                    onClick={() => {
-                                        if (!(window as any).cloudinary) {
-                                            alert('El widget de subida aún se está cargando. Por favor espera un momento.');
-                                            return;
-                                        }
-                                        (window as any).cloudinary.openUploadWidget(
-                                            { cloudName: 'dlkky5xuo', uploadPreset: 'promedid_preset', sources: ['local', 'url'] },
-                                            async (error: any, result: any) => {
-                                                if (!error && result && result.event === "success") {
-                                                    const { data, error: dbError } = await supabase.from('media').insert({
-                                                        url: result.info.secure_url,
-                                                        type: result.info.resource_type,
-                                                        public_id: result.info.public_id,
-                                                        name: result.info.original_filename || 'Nuevo Archivo'
-                                                    }).select();
-                                                    if (!dbError) {
-                                                        fetchMedia();
-                                                        onMediaSelect(result.info.secure_url);
-                                                        setIsMediaModalOpen(false);
-                                                    }
-                                                }
-                                            }
-                                        );
-                                    }}
-                                    className="aspect-square border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-2 hover:border-emerald-500 hover:bg-emerald-50 transition-all group"
+                                    type="button"
+                                    onClick={() => setEditingLocation({ ...editingLocation, active: !editingLocation.active })}
+                                    className={`relative w-12 h-6 rounded-full transition-all ${editingLocation.active ? 'bg-emerald-500' : 'bg-slate-300'}`}
                                 >
-                                    <span className="text-2xl group-hover:scale-110 transition-transform">➕</span>
-                                    <span className="text-[10px] font-black text-slate-400 uppercase">Subir Nuevo</span>
+                                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${editingLocation.active ? 'left-7' : 'left-1'}`}></div>
                                 </button>
                             </div>
-                        </div>
+
+                            <button className="w-full bg-slate-900 hover:bg-emerald-600 text-white font-black py-5 rounded-[1.5rem] transition-all shadow-xl shadow-slate-900/10 uppercase tracking-widest text-xs">
+                                Guardar Cambios
+                            </button>
+                        </form>
                     </div>
                 </div>
             )}
