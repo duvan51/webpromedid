@@ -6,7 +6,7 @@ import LandingPage from './LandingPage';
 
 type AdminTab = 'products' | 'offers' | 'packages' | 'landings' | 'media' | 'analytics' | 'widgets' | 'locations';
 
-const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; label?: string; onOpenLibrary?: () => void }> = ({ value, onChange, label, onOpenLibrary }) => {
+const MediaUploader: React.FC<{ value: string; onChange: (url: string) => void; label?: string; onOpenLibrary?: () => void; accept?: string; type?: 'image' | 'video' | 'all' }> = ({ value, onChange, label, onOpenLibrary, accept = 'image/*', type = 'image' }) => {
     const [isUploading, setIsUploading] = useState(false);
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -15,35 +15,44 @@ const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; 
 
         setIsUploading(true);
         try {
-            const url = await (window as any).uploadImageToLibrary(file);
+            const url = await (window as any).uploadMediaToLibrary(file);
             onChange(url);
         } catch (err: any) {
-            alert('Error al subir imagen: ' + err.message);
+            alert('Error al subir archivo: ' + err.message);
         } finally {
             setIsUploading(false);
         }
     };
 
+    const isVideo = value?.toLowerCase().match(/\.(mp4|webm|ogg|mov)$/) || value?.includes('/video/upload/');
+
     return (
         <div className="space-y-2">
             <div className="flex justify-between items-center px-1">
-                <label className="text-xs font-bold text-slate-500">{label || 'Imagen'}</label>
+                <label className="text-xs font-bold text-slate-500">{label || 'Multimedia'}</label>
                 {onOpenLibrary && (
                     <button
                         type="button"
                         onClick={onOpenLibrary}
                         className="text-emerald-600 font-black text-[10px] uppercase hover:underline"
                     >
-                        Biblioteca 🖼️
+                        Biblioteca {type === 'video' ? '🎬' : '🖼️'}
                     </button>
                 )}
             </div>
             <div className="flex gap-4 items-center">
                 <div className="relative group w-24 h-24 bg-slate-100 rounded-2xl overflow-hidden border-2 border-dashed border-slate-200 flex items-center justify-center shrink-0">
                     {value ? (
-                        <img src={value} alt="Preview" className="w-full h-full object-cover" />
+                        isVideo ? (
+                            <div className="flex flex-col items-center justify-center p-2 text-center">
+                                <span className="text-3xl">🎬</span>
+                                <span className="text-[8px] text-slate-400 mt-1 truncate w-20">Video</span>
+                            </div>
+                        ) : (
+                            <img src={value} alt="Preview" className="w-full h-full object-cover" />
+                        )
                     ) : (
-                        <span className="text-slate-300 text-2xl">🖼️</span>
+                        <span className="text-slate-300 text-2xl">{type === 'video' ? '🎥' : '🖼️'}</span>
                     )}
                     {isUploading && (
                         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center">
@@ -57,12 +66,12 @@ const ImageUploader: React.FC<{ value: string; onChange: (url: string) => void; 
                         value={value}
                         onChange={e => onChange(e.target.value)}
                         className="w-full bg-slate-50 p-3 rounded-xl border border-transparent focus:border-emerald-500 outline-none transition-all text-[10px] font-mono"
-                        placeholder="URL de la imagen..."
+                        placeholder={`URL del ${type === 'video' ? 'video' : 'archivo'}...`}
                     />
                     <label className="inline-block cursor-pointer">
-                        <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} disabled={isUploading} />
+                        <input type="file" className="hidden" accept={accept} onChange={handleFileChange} disabled={isUploading} />
                         <span className={`text-[10px] font-black uppercase px-4 py-2 rounded-lg transition-all ${isUploading ? 'bg-slate-100 text-slate-400' : 'bg-slate-900 text-white hover:bg-emerald-600'}`}>
-                            {isUploading ? 'Subiendo...' : '📂 Subir Archivo'}
+                            {isUploading ? 'Subiendo...' : `📂 Subir ${type === 'video' ? 'Video' : 'Archivo'}`}
                         </span>
                     </label>
                 </div>
@@ -170,19 +179,25 @@ const AdminDashboard: React.FC = () => {
         }
     }, [isLoggedIn]);
 
-    // Expose upload function for ImageUploader
-    (window as any).uploadImageToLibrary = async (file: File) => {
-        const url = await uploadImage(file);
+    // Expose upload function for MediaUploader
+    (window as any).uploadMediaToLibrary = async (file: File) => {
+        const { uploadMedia } = await import('../utils/cloudinary');
+        const url = await uploadMedia(file);
+        const isVideo = file.type.startsWith('video');
+
         // Register in media table
         const { error } = await supabase.from('media').insert({
             url,
-            type: 'image',
+            type: isVideo ? 'video' : 'image',
             public_id: `manual_${Date.now()}`,
             name: file.name
         });
         if (!error) fetchMedia();
         return url;
     };
+
+    // Alias for backward compatibility
+    (window as any).uploadImageToLibrary = (window as any).uploadMediaToLibrary;
 
     const fetchMedia = async () => {
         const { data, error } = await supabase.from('media').select('*').order('created_at', { ascending: false });
@@ -281,7 +296,13 @@ const AdminDashboard: React.FC = () => {
                 phone: editingLocation.phone,
                 active: editingLocation.active,
                 slots_total: editingLocation.slots_total,
-                slots_booked: editingLocation.slots_booked
+                slots_booked: editingLocation.slots_booked,
+                banner_url: editingLocation.banner_url,
+                video_url: editingLocation.video_url,
+                map_url: editingLocation.map_url,
+                latitude: editingLocation.latitude,
+                longitude: editingLocation.longitude,
+                place_id: editingLocation.place_id
             });
 
             if (error) throw error;
@@ -580,7 +601,7 @@ const AdminDashboard: React.FC = () => {
 
                     {activeTab === 'locations' && (
                         <button
-                            onClick={() => setEditingLocation({ id: 'nuevo-' + Date.now(), city: 'Bogotá', name: '', address: '', phone: '', active: true, slots_total: 30, slots_booked: 0 })}
+                            onClick={() => setEditingLocation({ id: 'nuevo-' + Date.now(), city: 'Bogotá', name: '', address: '', phone: '', active: true, slots_total: 30, slots_booked: 0, banner_url: '', video_url: '', map_url: '', latitude: 4.665976, longitude: -74.058817, place_id: '' })}
                             className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-emerald-600-20 transition-all flex items-center gap-2"
                         >
                             <span>+</span> Nueva Sede
@@ -975,7 +996,7 @@ const AdminDashboard: React.FC = () => {
                                 </div>
                             </div>
 
-                            <ImageUploader
+                            <MediaUploader
                                 label="Imagen del Servicio (Vista previa)"
                                 value={editingService.imageUrl}
                                 onChange={url => setEditingService({ ...editingService, imageUrl: url })}
@@ -1404,7 +1425,7 @@ const AdminDashboard: React.FC = () => {
                                             </div>
                                         </div>
                                     </div>
-                                    <ImageUploader
+                                    <MediaUploader
                                         label="Imagen de Fondo Hero"
                                         value={editingLanding.config.hero.imageUrl}
                                         onOpenLibrary={() => {
@@ -1766,9 +1787,17 @@ const AdminDashboard: React.FC = () => {
                                                     }}
                                                     placeholder="Descripción detallada..."
                                                 />
-                                                <ImageUploader
+                                                <MediaUploader
                                                     label="Imagen Solución"
                                                     value={s.image}
+                                                    onOpenLibrary={() => {
+                                                        setOnMediaSelect(() => (url: string) => {
+                                                            const newSols = [...editingLanding.config.solutions];
+                                                            newSols[i] = { ...s, image: url };
+                                                            setEditingLanding({ ...editingLanding, config: { ...editingLanding.config, solutions: newSols } });
+                                                        });
+                                                        setIsMediaModalOpen(true);
+                                                    }}
                                                     onChange={url => {
                                                         const newSols = [...editingLanding.config.solutions];
                                                         newSols[i] = { ...s, image: url };
@@ -2179,6 +2208,76 @@ const AdminDashboard: React.FC = () => {
             )}
 
             {/* Global Media Selection Modal */}
+            {isMediaModalOpen && (
+                <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setIsMediaModalOpen(false)}></div>
+                    <div className="relative bg-[#F8FAFC] w-full max-w-5xl h-[85vh] rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden animate-scale-in">
+                        <div className="p-8 border-b bg-white flex justify-between items-center">
+                            <div>
+                                <h2 className="text-2xl font-black text-slate-900">Biblioteca de Medios</h2>
+                                <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">Selecciona un archivo para insertar</p>
+                            </div>
+                            <div className="flex gap-4 items-center">
+                                <div className="flex bg-slate-100 p-1 rounded-xl">
+                                    <button
+                                        onClick={() => setMediaFilter('all')}
+                                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mediaFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+                                    >Todo</button>
+                                    <button
+                                        onClick={() => setMediaFilter('image')}
+                                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mediaFilter === 'image' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+                                    >Imágenes</button>
+                                    <button
+                                        onClick={() => setMediaFilter('video')}
+                                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mediaFilter === 'video' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+                                    >Videos</button>
+                                </div>
+                                <button onClick={() => setIsMediaModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-400 rounded-full hover:bg-slate-200">✕</button>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-8">
+                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                                {media
+                                    .filter(m => mediaFilter === 'all' || m.type === mediaFilter)
+                                    .map(m => (
+                                        <button
+                                            key={m.id}
+                                            onClick={() => {
+                                                onMediaSelect(m.url);
+                                                setIsMediaModalOpen(false);
+                                            }}
+                                            className="group relative bg-white rounded-3xl overflow-hidden border-2 border-transparent hover:border-emerald-500 transition-all text-left"
+                                        >
+                                            <div className="aspect-square relative flex items-center justify-center bg-slate-50">
+                                                {m.type === 'image' ? (
+                                                    <img src={m.url} className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <div className="flex flex-col items-center">
+                                                        <span className="text-4xl">🎬</span>
+                                                        <span className="text-[10px] font-bold text-slate-400 mt-2">Video</span>
+                                                    </div>
+                                                )}
+                                                <div className="absolute top-2 left-2 px-2 py-1 bg-slate-900/60 text-white text-[8px] font-black rounded-lg uppercase backdrop-blur-md">
+                                                    {m.type}
+                                                </div>
+                                            </div>
+                                            <div className="p-3">
+                                                <p className="text-[10px] font-bold text-slate-600 truncate">{m.name || 'Sin nombre'}</p>
+                                            </div>
+                                        </button>
+                                    ))}
+                                {media.filter(m => mediaFilter === 'all' || m.type === mediaFilter).length === 0 && (
+                                    <div className="col-span-full py-20 text-center">
+                                        <p className="text-slate-400 font-bold uppercase tracking-widest text-xs">No hay archivos en esta categoría</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Modal de Edición de Sedes */}
             {editingLocation && (
                 <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
@@ -2239,6 +2338,84 @@ const AdminDashboard: React.FC = () => {
                                     onChange={e => setEditingLocation({ ...editingLocation, phone: e.target.value })}
                                     placeholder="+57..."
                                 />
+                            </div>
+
+                            <div className="space-y-4 pt-4 border-t border-slate-100">
+                                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Multimedia y Ubicación</h4>
+
+                                <MediaUploader
+                                    label="Banner de la Sede"
+                                    value={editingLocation.banner_url || ''}
+                                    onOpenLibrary={() => {
+                                        setOnMediaSelect(() => (url: string) => {
+                                            setEditingLocation((prev: any) => ({ ...prev, banner_url: url }));
+                                        });
+                                        setIsMediaModalOpen(true);
+                                    }}
+                                    onChange={url => setEditingLocation({ ...editingLocation, banner_url: url })}
+                                />
+
+                                <MediaUploader
+                                    label="Video 'Cómo Llegar'"
+                                    value={editingLocation.video_url || ''}
+                                    type="video"
+                                    accept="video/*"
+                                    onOpenLibrary={() => {
+                                        setOnMediaSelect(() => (url: string) => {
+                                            setEditingLocation((prev: any) => ({ ...prev, video_url: url }));
+                                        });
+                                        setIsMediaModalOpen(true);
+                                        setMediaFilter('video');
+                                    }}
+                                    onChange={url => setEditingLocation({ ...editingLocation, video_url: url })}
+                                />
+
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1">URL Google Maps</label>
+                                    <input
+                                        type="text"
+                                        className="w-full bg-slate-50 p-4 rounded-2xl border-none outline-none text-[10px] font-mono"
+                                        value={editingLocation.map_url || ''}
+                                        onChange={e => setEditingLocation({ ...editingLocation, map_url: e.target.value })}
+                                        placeholder="Pegue aquí el enlace de compartir de Google Maps"
+                                    />
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Latitud</label>
+                                        <input
+                                            type="number"
+                                            step="any"
+                                            className="w-full bg-slate-50 p-4 rounded-2xl border-none outline-none text-[10px] font-mono"
+                                            value={editingLocation.latitude || ''}
+                                            onChange={e => setEditingLocation({ ...editingLocation, latitude: parseFloat(e.target.value) })}
+                                            placeholder="4.6659..."
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Longitud</label>
+                                        <input
+                                            type="number"
+                                            step="any"
+                                            className="w-full bg-slate-50 p-4 rounded-2xl border-none outline-none text-[10px] font-mono"
+                                            value={editingLocation.longitude || ''}
+                                            onChange={e => setEditingLocation({ ...editingLocation, longitude: parseFloat(e.target.value) })}
+                                            placeholder="-74.0588..."
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Google Place ID</label>
+                                    <input
+                                        type="text"
+                                        className="w-full bg-slate-50 p-4 rounded-2xl border-none outline-none text-[10px] font-mono"
+                                        value={editingLocation.place_id || ''}
+                                        onChange={e => setEditingLocation({ ...editingLocation, place_id: e.target.value })}
+                                        placeholder="ChIJJUj5UV-aP44..."
+                                    />
+                                </div>
                             </div>
 
                             <div className="bg-emerald-50 p-6 rounded-[2rem] space-y-4">

@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import StoreLocator from './StoreLocator';
 
 interface Location {
   id: string;
@@ -11,12 +12,19 @@ interface Location {
   active: boolean;
   slots_total: number;
   slots_booked: number;
+  banner_url?: string;
+  video_url?: string;
+  map_url?: string;
+  latitude?: number;
+  longitude?: number;
+  place_id?: string;
 }
 
 const Locations: React.FC = () => {
   const [locations, setLocations] = useState<Location[]>([]);
   const [activeTab, setActiveTab] = useState('');
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
 
   useEffect(() => {
     fetchLocations();
@@ -56,91 +64,135 @@ const Locations: React.FC = () => {
         <h3 className="text-4xl font-bold text-slate-900">Nuestras Sedes en Colombia</h3>
       </div>
 
-      <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden grid lg:grid-cols-12 min-h-[600px]">
-        {/* Navigation */}
-        <div className="lg:col-span-4 bg-emerald-50 p-8 border-r border-slate-100">
-          <h4 className="text-xl font-bold text-emerald-900 mb-8">Seleccione su ciudad</h4>
-          <div className="space-y-3">
-            {cities.map(city => (
-              <button
-                key={city}
-                onClick={() => setActiveTab(city)}
-                className={`w-full text-left px-6 py-4 rounded-2xl font-bold transition-all flex items-center justify-between ${activeTab === city
-                    ? 'bg-white text-emerald-600 shadow-lg shadow-emerald-200/50 translate-x-2'
-                    : 'text-slate-500 hover:bg-white/50'
-                  }`}
-              >
-                {city}
-                {activeTab === city && (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
-                )}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-12 p-6 bg-emerald-100/50 rounded-2xl border border-emerald-200">
-            <p className="text-sm font-medium text-emerald-800 leading-relaxed">
-              Estamos expandiéndonos continuamente para llevar salud integral a más rincones de Colombia.
-            </p>
-          </div>
-        </div>
-
-        {/* Details and Visual */}
-        <div className="lg:col-span-8 p-8 md:p-12">
-          <div className="h-full flex flex-col">
-            <div className="flex-1">
-              <div className="grid md:grid-cols-2 gap-8 mb-12">
-                {filteredLocations.map(loc => {
-                  const availableSlots = loc.slots_total - loc.slots_booked;
-                  const isLowAvailability = (availableSlots / loc.slots_total) < 0.3;
-
-                  return (
-                    <div key={loc.id} className="p-8 rounded-3xl border-2 border-slate-50 hover:border-emerald-100 transition-colors group relative overflow-hidden">
-                      {/* Alerta de Cupos */}
-                      <div className={`absolute top-4 right-4 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${isLowAvailability ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-emerald-100 text-emerald-600'
-                        }`}>
-                        {availableSlots} Cupos Libres
-                      </div>
-
-                      <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-6 group-hover:bg-emerald-600 group-hover:text-white transition-all">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                      </div>
-                      <h5 className="text-xl font-bold text-slate-900 mb-2">{loc.name}</h5>
-                      <p className="text-slate-500 mb-4">{loc.address}</p>
-                      <p className="text-emerald-600 font-bold mb-4">{loc.phone}</p>
-
-                      <div className="flex items-center gap-2 mt-auto">
-                        <div className="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full ${isLowAvailability ? 'bg-red-500' : 'bg-emerald-500'}`}
-                            style={{ width: `${(loc.slots_booked / loc.slots_total) * 100}%` }}
-                          ></div>
-                        </div>
-                        <span className="text-[10px] font-bold text-slate-400">Agendando...</span>
-                      </div>
-
-                      <button className="mt-6 w-full py-3 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-emerald-600 transition-all">
-                        Ver en el mapa
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="relative rounded-[2rem] overflow-hidden h-48 md:h-64 shadow-inner mt-auto">
-              <img src={`https://picsum.photos/seed/${activeTab}/1200/400`} alt="City view" className="w-full h-full object-cover grayscale opacity-50 contrast-125" />
-              <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/20 to-transparent"></div>
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-4xl md:text-6xl font-black text-white/40 uppercase tracking-widest select-none">{activeTab}</span>
-              </div>
-            </div>
-          </div>
+      <div className="flex justify-center mb-8">
+        <div className="bg-slate-100 p-1.5 rounded-2xl flex gap-1">
+          <button
+            onClick={() => setViewMode('list')}
+            className={`px-8 py-3 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${viewMode === 'list' ? 'bg-white text-emerald-600 shadow-md translate-y-[-1px]' : 'text-slate-500 hover:text-slate-800'}`}
+          >
+            <span>📋</span> Vista Lista
+          </button>
+          <button
+            onClick={() => setViewMode('map')}
+            className={`px-8 py-3 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${viewMode === 'map' ? 'bg-white text-emerald-600 shadow-md translate-y-[-1px]' : 'text-slate-500 hover:text-slate-800'}`}
+          >
+            <span>🗺️</span> Ver Mapa
+          </button>
         </div>
       </div>
+
+      {viewMode === 'map' ? (
+        <div className="animate-fade-in">
+          <StoreLocator
+            locations={locations}
+            apiKey={import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'YOUR_API_KEY_HERE'}
+          />
+        </div>
+      ) : (
+        <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden grid lg:grid-cols-12 min-h-[600px] animate-fade-in border border-slate-100">
+          {/* Navigation */}
+          <div className="lg:col-span-4 bg-emerald-50 p-8 border-r border-slate-100">
+            <h4 className="text-xl font-bold text-emerald-900 mb-8">Seleccione su ciudad</h4>
+            <div className="space-y-3">
+              {cities.map(city => (
+                <button
+                  key={city}
+                  onClick={() => setActiveTab(city)}
+                  className={`w-full text-left px-6 py-4 rounded-2xl font-bold transition-all flex items-center justify-between ${activeTab === city
+                    ? 'bg-white text-emerald-600 shadow-lg shadow-emerald-200/50 translate-x-2'
+                    : 'text-slate-500 hover:bg-white/50'
+                    }`}
+                >
+                  {city}
+                  {activeTab === city && (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-12 p-6 bg-emerald-100/50 rounded-2xl border border-emerald-200">
+              <p className="text-sm font-medium text-emerald-800 leading-relaxed">
+                Estamos expandiéndonos continuamente para llevar salud integral a más rincones de Colombia.
+              </p>
+            </div>
+          </div>
+
+          {/* Details and Visual */}
+          <div className="lg:col-span-8 p-8 md:p-12">
+            <div className="h-full flex flex-col">
+              <div className="flex-1">
+                <div className="grid md:grid-cols-2 gap-8 mb-12">
+                  {filteredLocations.map(loc => {
+                    const availableSlots = loc.slots_total - loc.slots_booked;
+                    const isLowAvailability = (availableSlots / loc.slots_total) < 0.3;
+
+                    return (
+                      <div key={loc.id} className="p-8 rounded-3xl border-2 border-slate-50 hover:border-emerald-100 transition-colors group relative overflow-hidden">
+                        {/* Alerta de Cupos */}
+                        <div className={`absolute top-4 right-4 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${isLowAvailability ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-emerald-100 text-emerald-600'
+                          }`}>
+                          {availableSlots} Cupos Libres
+                        </div>
+
+                        <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-6 group-hover:bg-emerald-600 group-hover:text-white transition-all">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
+                        </div>
+                        <h5 className="text-xl font-bold text-slate-900 mb-2">{loc.name}</h5>
+                        <p className="text-slate-500 mb-4">{loc.address}</p>
+                        <p className="text-emerald-600 font-bold mb-4">{loc.phone}</p>
+
+                        <div className="flex items-center gap-2 mt-auto">
+                          <div className="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full ${isLowAvailability ? 'bg-red-500' : 'bg-emerald-500'}`}
+                              style={{ width: `${(loc.slots_booked / loc.slots_total) * 100}%` }}
+                            ></div>
+                          </div>
+                          <span className="text-[10px] font-bold text-slate-400">Agendando...</span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 mt-6">
+                          <button
+                            onClick={() => loc.map_url && window.open(loc.map_url, '_blank')}
+                            className="py-3 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 transition-all disabled:opacity-50"
+                            disabled={!loc.map_url}
+                          >
+                            Ubicación 📍
+                          </button>
+                          <button
+                            onClick={() => loc.video_url && window.open(loc.video_url, '_blank')}
+                            className="py-3 bg-emerald-100 text-emerald-700 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-200 transition-all disabled:opacity-50"
+                            disabled={!loc.video_url}
+                          >
+                            Llegar 🎬
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Detail area with city banner if available */}
+              <div className="relative rounded-[2rem] overflow-hidden h-48 md:h-64 shadow-inner mt-auto mx-8 md:mx-12 mb-8 border-4 border-white shadow-xl">
+                {filteredLocations[0]?.banner_url ? (
+                  <img src={filteredLocations[0].banner_url} alt={activeTab} className="w-full h-full object-cover" />
+                ) : (
+                  <img src={`https://picsum.photos/seed/${activeTab}/1200/400`} alt="City view" className="w-full h-full object-cover grayscale opacity-50 contrast-125" />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-emerald-900/60 to-transparent"></div>
+                <div className="absolute bottom-6 left-8">
+                  <span className="text-3xl md:text-5xl font-black text-white uppercase tracking-widest select-none drop-shadow-lg">{activeTab}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,6 +1,8 @@
 
-import React from 'react';
-import { LOCATIONS, Location, getWhatsAppLeadUrl } from '../utils/whatsapp';
+import React, { useState, useEffect } from 'react';
+import { getWhatsAppLeadUrl } from '../utils/whatsapp';
+import { supabase } from '../lib/supabase';
+import { Location } from '../types';
 
 interface LocationSelectorModalProps {
     isOpen: boolean;
@@ -9,10 +11,37 @@ interface LocationSelectorModalProps {
 }
 
 const LocationSelectorModal: React.FC<LocationSelectorModalProps> = ({ isOpen, onClose, serviceTitle }) => {
+    const [locations, setLocations] = useState<Location[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (isOpen) {
+            fetchLocations();
+        }
+    }, [isOpen]);
+
+    const fetchLocations = async () => {
+        setLoading(true);
+        const { data, error } = await supabase
+            .from('locations')
+            .select('*')
+            .eq('active', true)
+            .order('city', { ascending: true });
+
+        if (!error && data) {
+            setLocations(data);
+        }
+        setLoading(false);
+    };
+
     if (!isOpen) return null;
 
-    const handleSelect = (location: Location) => {
-        const url = getWhatsAppLeadUrl({ serviceTitle, location });
+    const handleSelect = (loc: Location) => {
+        const url = getWhatsAppLeadUrl({
+            serviceTitle,
+            location: `${loc.city} - ${loc.name}`,
+            phoneNumber: loc.phone
+        });
         window.open(url, '_blank');
         onClose();
     };
@@ -32,20 +61,32 @@ const LocationSelectorModal: React.FC<LocationSelectorModalProps> = ({ isOpen, o
                         </svg>
                     </div>
                     <h2 className="text-2xl font-bold text-slate-900">Seleccione su Sede</h2>
-                    <p className="text-slate-500 text-sm mt-2">Elija la ciudad más cercana para agendar su cita</p>
+                    <p className="text-slate-500 text-sm mt-2">Elija la sede más cercana para agendar su cita</p>
                 </div>
 
-                <div className="space-y-3">
-                    {LOCATIONS.map((location) => (
-                        <button
-                            key={location}
-                            onClick={() => handleSelect(location)}
-                            className="w-full py-4 px-6 bg-slate-50 hover:bg-emerald-600 hover:text-white rounded-2xl font-bold text-slate-700 transition-all flex items-center justify-between group"
-                        >
-                            {location}
-                            <span className="opacity-0 group-hover:opacity-100 transition-opacity">→</span>
-                        </button>
-                    ))}
+                <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
+                    {loading ? (
+                        <div className="flex justify-center py-4">
+                            <div className="w-6 h-6 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                    ) : (
+                        locations.map((loc) => (
+                            <button
+                                key={loc.id}
+                                onClick={() => handleSelect(loc)}
+                                className="w-full py-4 px-6 bg-slate-50 hover:bg-emerald-600 hover:text-white rounded-2xl font-bold text-slate-700 transition-all flex items-center justify-between group text-left"
+                            >
+                                <div>
+                                    <p className="text-[10px] text-emerald-600 group-hover:text-emerald-100 uppercase tracking-widest mb-1">{loc.city}</p>
+                                    <p className="text-sm">{loc.name}</p>
+                                </div>
+                                <span className="opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+                            </button>
+                        ))
+                    )}
+                    {!loading && locations.length === 0 && (
+                        <p className="text-center text-slate-400 text-xs italic">No hay sedes activas disponibles</p>
+                    )}
                 </div>
 
                 <button

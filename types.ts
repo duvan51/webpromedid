@@ -13,8 +13,18 @@ export interface ServiceItem {
 export interface Location {
   id: string;
   city: string;
+  name: string;
   address: string;
   phone: string;
+  active: boolean;
+  slots_total: number;
+  slots_booked: number;
+  banner_url?: string;
+  video_url?: string;
+  map_url?: string;
+  latitude?: number;
+  longitude?: number;
+  place_id?: string;
 }
 
 export interface Treatment {

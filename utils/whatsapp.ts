@@ -6,9 +6,11 @@
 export const getWhatsAppLeadUrl = (options: {
     serviceTitle?: string,
     location?: string,
-    customMessage?: string
+    customMessage?: string,
+    phoneNumber?: string
 }): string => {
-    const phoneNumber = "573000000000"; // Reemplazar con el número real de Promedid
+    const defaultPhoneNumber = "573000000000"; // Reemplazar con el número real por defecto
+    const targetPhone = (options.phoneNumber || defaultPhoneNumber).replace(/\D/g, '');
     const today = new Date();
     const dateStr = today.toLocaleDateString('es-ES', {
         day: '2-digit',
@@ -25,7 +27,7 @@ export const getWhatsAppLeadUrl = (options: {
 
     const finalMessage = `${message} -- ${parts.join(' -- ')}`;
 
-    return `https://wa.me/${phoneNumber}?text=${encodeURIComponent(finalMessage)}`;
+    return `https://wa.me/${targetPhone}?text=${encodeURIComponent(finalMessage)}`;
 };
 
 export const LOCATIONS = ['Bogotá', 'Villavicencio', 'Pereira'] as const;

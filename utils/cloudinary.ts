@@ -1,15 +1,19 @@
-const CLOUDINARY_URL = 'https://api.cloudinary.com/v1_1/dlkky5xuo/image/upload';
-const UPLOAD_PRESET = 'promedid_preset'; // Recommended unsigned preset name
+const CLOUDINARY_BASE_URL = 'https://api.cloudinary.com/v1_1/dlkky5xuo';
+const UPLOAD_PRESET = 'promedid_preset';
 const FOLDER = 'promedid';
 
-export const uploadImage = async (file: File): Promise<string> => {
+export const uploadMedia = async (file: File): Promise<string> => {
+    const isVideo = file.type.startsWith('video');
+    const resourceType = isVideo ? 'video' : 'image';
+    const uploadUrl = `${CLOUDINARY_BASE_URL}/${resourceType}/upload`;
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('upload_preset', UPLOAD_PRESET);
     formData.append('folder', FOLDER);
 
     try {
-        const response = await fetch(CLOUDINARY_URL, {
+        const response = await fetch(uploadUrl, {
             method: 'POST',
             body: formData,
         });
@@ -27,3 +31,6 @@ export const uploadImage = async (file: File): Promise<string> => {
         throw error;
     }
 };
+
+// Maintain compatibility if needed elsewhere
+export const uploadImage = uploadMedia;
